@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import './App.css';
 import OCRLanding from './OCRLanding';
 import Admin from './pages/Admin';
+import Dashboard from './pages/Dashboard';
 
 function App() {
   return (
@@ -13,7 +14,8 @@ function App() {
 
       <Routes>
         <Route path="/" element={<OCRLanding />} />
-        <Route path="/admin" element={<Admin />} />
+        <Route path="/login" element={<Admin />} />
+        <Route path="/dashboard" element={<Dashboard />} />
       </Routes>
     </BrowserRouter>
   );
