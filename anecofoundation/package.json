@@ -10,14 +10,17 @@
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
     "express": "^4.22.1",
+    "html2pdf.js": "^0.14.0",
     "multer": "^1.4.5-lts.1",
     "mysql2": "^3.16.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-router-dom": "^6.30.3",
     "react-scripts": "^5.0.1",
+    "sharp": "^0.34.5",
     "tesseract.js": "^4.1.1",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",

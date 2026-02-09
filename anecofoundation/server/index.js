@@ -3,6 +3,7 @@ const multer = require('multer');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const sharp = require('sharp');
 const { createWorker } = require('tesseract.js');
 
 const uploadDir = path.join(__dirname, 'uploads');
@@ -54,9 +55,21 @@ app.post('/ocr', upload.single('image'), async (req, res) => {
   if (!worker) return res.status(503).json({ error: 'OCR worker not ready' });
   const filePath = req.file.path;
   try {
-    const { data: { text } } = await worker.recognize(filePath);
-    // remove uploaded file
+    // Preprocess image: auto-rotate by EXIF, convert to grayscale, resize for better OCR
+    const procPath = `${filePath}-proc.jpg`;
+    await sharp(filePath)
+      .rotate() // Auto-orient using EXIF data
+      .grayscale()
+      .resize({ width: 2000, withoutEnlargement: true })
+      .jpeg({ quality: 90 })
+      .toFile(procPath);
+
+    const { data: { text } } = await worker.recognize(procPath);
+    
+    // Cleanup temporary files
     fs.unlink(filePath, () => {});
+    fs.unlink(procPath, () => {});
+    
     res.json({ text });
   } catch (err) {
     console.error('OCR error:', err);
