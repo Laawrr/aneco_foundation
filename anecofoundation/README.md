@@ -65,6 +65,20 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/a
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
 
+### OCR demo and usage ⚡
+
+A simple client-side OCR landing page was added at the app root. It uses `tesseract.js` to extract text from uploaded images in the browser.
+
+Quick steps to run locally:
+
+1. Install dependencies: `npm install` (if `npm` is blocked in PowerShell, run from an elevated PowerShell, Windows cmd, or WSL).
+2. Start the app: `npm start` and open http://localhost:3000.
+3. Use the upload control on the landing page to select an image and click **Run OCR**.
+
+Notes & troubleshooting:
+- For best results, use clear, high-resolution images and crop tightly to the text area.
+- If `npm install` fails in PowerShell with an execution policy error, run `npm install` from a regular Command Prompt (cmd.exe) or enable script execution (see: https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_execution_policies).
+
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
