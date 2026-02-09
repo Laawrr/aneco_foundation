@@ -445,8 +445,7 @@ function OCRLanding() {
     <div className="ocr-scanner">
       {/* Top Toolbar */}
       <div className="toolbar toolbar-top">
-        <button className="toolbar-back" onClick={() => window.history.back()} title="Back">←</button>
-        <h1>Aneco Document Scanner</h1>
+        <h1>Aneco Foundation</h1>
       </div>
 
       {/* Main Content */}
@@ -463,14 +462,14 @@ function OCRLanding() {
             <>
               <video ref={videoRef} autoPlay playsInline muted className="camera-feed" style={{ transform: `rotate(${rotateView}deg)` }} />
               <div className="document-overlay">
-                <p className="instruction-text">Position document within the frame</p>
+                <p className="instruction-text">Capturing your document...</p>
                 <div className="document-frame">
                   <div className="corner corner-tl"></div>
                   <div className="corner corner-tr"></div>
                   <div className="corner corner-bl"></div>
                   <div className="corner corner-br"></div>
                 </div>
-                <p className="hint-text">Ensure text is clear and readable</p>
+                <p className="hint-text">Ensure all text is clearly visible</p>
               </div>
             </>
           )}
@@ -548,14 +547,23 @@ function OCRLanding() {
       <div className="toolbar toolbar-bottom">
         {mode === 'capture' && (
           <div className="bottom-actions">
-            <button className="btn-circle btn-upload" onClick={openFilePicker} title="Upload">
-              📁
+            <button className="btn-circle btn-upload" onClick={openFilePicker} title="Upload File" aria-label="Upload file">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <rect x="6" y="5" width="8" height="11" stroke="currentColor" strokeWidth="1.5" fill="none" rx="1"/>
+                <path d="M8 8h4M8 11h4M8 14h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
             </button>
-            <button className="btn-circle btn-rotate" onClick={rotateLiveView} title="Rotate view">
-              ↻
+            <button className="btn-circle btn-rotate" onClick={rotateLiveView} title="Rotate View" aria-label="Rotate camera view">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M5 5L3 7L5 9M15 5L17 7L15 9M15 15L17 17L15 19M5 15L3 17L5 19" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M10 2C6 2 3 5 3 9M10 18C14 18 17 15 17 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
             </button>
-            <button className="btn-circle btn-confirm" onClick={captureFrame} disabled={!cameraActive} title="Capture">
-              ✅
+            <button className="btn-circle btn-confirm" onClick={captureFrame} disabled={!cameraActive} title="Capture Photo" aria-label="Capture photo">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" fill="none"/>
+                <circle cx="12" cy="12" r="5" fill="currentColor"/>
+              </svg>
             </button>
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileUpload} style={{ display: 'none' }} />
           </div>
@@ -563,10 +571,9 @@ function OCRLanding() {
 
         {mode === 'preview' && (
           <div className="preview-actions">
-            <button className="btn-circle btn-rotate" onClick={rotateCapturedPreview} title="Rotate image">↻</button>
-            <div style={{ display: 'flex', gap: '12px' }}>
-              <button className="btn-secondary" onClick={resetCapture}>↺ Retake</button>
-              <button className="btn-primary" onClick={processImage}>🔍 Process</button>
+            <div className="preview-buttons">
+              <button className="btn-secondary" onClick={resetCapture}>Retake</button>
+              <button className="btn-primary" onClick={processImage}>Process Document</button>
             </div>
           </div>
         )}
