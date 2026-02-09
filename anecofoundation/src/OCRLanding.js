@@ -525,6 +525,14 @@ function OCRLanding() {
             </div>
           )}
           <img src={capturedImage} alt="Document" className="preview-image" />
+          {mode === 'preview' && (
+            <button className="btn-circle btn-rotate-preview" onClick={rotateCapturedPreview} title="Rotate Image" aria-label="Rotate image">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M5 5L3 7L5 9M15 5L17 7L15 9M15 15L17 17L15 19M5 15L3 17L5 19" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                <path d="M10 2C6 2 3 5 3 9M10 18C14 18 17 15 17 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
+          )}
         </div>
       )}
 
