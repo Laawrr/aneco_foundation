@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './OCRLanding.css';
 import { createWorker } from 'tesseract.js';
+import ImageCropper from './components/ImageCropper';
 
 // Parser function to extract structured data from OCR text
 const parseOCRText = (text) => {
@@ -115,6 +116,11 @@ function OCRLanding() {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState(null);
   const [rotateView, setRotateView] = useState(0); // degrees to rotate live video for user
+  const [facingMode, setFacingMode] = useState('environment'); // 'user' or 'environment'
+  const [showCropper, setShowCropper] = useState(false);
+  const [cropData, setCropData] = useState(null);
+  const [manualEntryData, setManualEntryData] = useState(null);
+  const [showManualEntry, setShowManualEntry] = useState(false);
   const workerRef = useRef(null);
 
   useEffect(() => {
@@ -158,7 +164,7 @@ function OCRLanding() {
       setCameraError(null);
       const constraints = {
         video: {
-          facingMode: { ideal: 'environment' },
+          facingMode: { ideal: facingMode },
           width: { ideal: 1280 },
           height: { ideal: 720 }
         },
@@ -263,6 +269,29 @@ function OCRLanding() {
     setRotateView(prev => (prev + 90) % 360);
   };
 
+  // Toggle between front and back camera
+  const toggleCamera = () => {
+    stopCamera();
+    setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
+    setTimeout(() => startCamera(), 100);
+  };
+
+  // Crop functionality
+  const handleCropImage = () => {
+    setShowCropper(true);
+  };
+
+  const applyCrop = (croppedImageData) => {
+    setCapturedImage(croppedImageData);
+    setShowCropper(false);
+    setCropData(null);
+  };
+
+  const cancelCrop = () => {
+    setShowCropper(false);
+    setCropData(null);
+  };
+
   // Rotate the captured image in preview before processing/saving
   const rotateCapturedPreview = async () => {
     if (!capturedImage) return;
@@ -311,7 +340,48 @@ function OCRLanding() {
 
           let isValid = true;
           let issue = '';
+          let missingFields = [];
 
+          if (!parsed.transactionRef) {
+            missingFields.push('Transaction Reference');
+          } else {
+            // Require at least 15 digits in the transaction reference
+            const digitCount = (parsed.transactionRef.match(/\d/g) || []).length;
+            if (digitCount < 15) {
+              missingFields.push('Transaction Reference (insufficient digits)');
+            }
+          }
+
+          if (!parsed.accountNumber) {
+            missingFields.push('Account Number');
+          }
+
+          if (!parsed.customerName) {
+            missingFields.push('Customer Name');
+          }
+
+          if (!parsed.electricityBill) {
+            missingFields.push('Electricity Bill');
+          }
+
+          if (!parsed.date) {
+            missingFields.push('Date');
+          }
+
+          // If some fields are missing, show manual entry modal
+          if (missingFields.length > 0) {
+            setManualEntryData({
+              ...parsed,
+              missingFields
+            });
+            setShowManualEntry(true);
+            setMode('preview');
+            setStatus('Ready');
+            setProgress(100);
+            return;
+          }
+
+          // Validate extracted data
           if (!parsed.transactionRef) {
             isValid = false;
             issue = '❌ Transaction reference not found';
@@ -438,6 +508,7 @@ function OCRLanding() {
         console.log('[api] save-ocr-data success:', data);
         showToast('✅ Saved successfully');
         setModalType(null);
+        setShowManualEntry(false);
         resetCapture();
       } else {
         const text = await res.text().catch(() => '');
@@ -446,6 +517,45 @@ function OCRLanding() {
       }
     } catch (err) {
       console.error('[api] save-ocr-data network error:', err.message || err);
+      showToast(`❌ Network error: ${err && err.message ? err.message : 'Failed to fetch'}`);
+    }
+    setStatus('Ready');
+  };
+
+  const saveManualEntry = async () => {
+    if (!manualEntryData) {
+      showToast('❌ No data to save');
+      return;
+    }
+
+    setStatus('Saving...');
+    try {
+      const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+      console.log('[ocr] Saving manual entry to database at', `${API_BASE}/api/ocr-data`);
+      
+      // Remove missingFields before saving
+      const { missingFields, ...dataToSave } = manualEntryData;
+      
+      const res = await fetch(`${API_BASE}/api/ocr-data`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dataToSave)
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        console.log('[api] save-manual-entry success:', data);
+        showToast('✅ Saved successfully');
+        setShowManualEntry(false);
+        setManualEntryData(null);
+        resetCapture();
+      } else {
+        const text = await res.text().catch(() => '');
+        console.error('[api] save-manual-entry failed', res.status, text);
+        showToast(`❌ Failed to save: ${res.status}`);
+      }
+    } catch (err) {
+      console.error('[api] save-manual-entry network error:', err.message || err);
       showToast(`❌ Network error: ${err && err.message ? err.message : 'Failed to fetch'}`);
     }
     setStatus('Ready');
@@ -496,16 +606,25 @@ function OCRLanding() {
             </div>
           ) : (
             <>
-              <video ref={videoRef} autoPlay playsInline muted className="camera-feed" style={{ transform: `rotate(${rotateView}deg)` }} />
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                muted 
+                className="camera-feed" 
+                style={{ 
+                  transform: `rotate(${rotateView}deg) ${facingMode === 'user' ? 'scaleX(-1)' : ''}` 
+                }} 
+              />
               <div className="document-overlay">
-                <p className="instruction-text">Capturing your document...</p>
+                <p className="instruction-text">Position your document</p>
                 <div className="document-frame">
                   <div className="corner corner-tl"></div>
                   <div className="corner corner-tr"></div>
                   <div className="corner corner-bl"></div>
                   <div className="corner corner-br"></div>
                 </div>
-                <p className="hint-text">Ensure all text is clearly visible</p>
+                <p className="hint-text">Align document inside the frame</p>
               </div>
             </>
           )}
@@ -609,6 +728,13 @@ function OCRLanding() {
                 <circle cx="12" cy="12" r="5" fill="currentColor"/>
               </svg>
             </button>
+            <button className="btn-circle btn-flip" onClick={toggleCamera} title="Flip Camera" aria-label="Flip camera">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M3 7C3 5.34315 4.34315 4 6 4H14C15.6569 4 17 5.34315 17 7V13C17 14.6569 15.6569 16 14 16H6C4.34315 16 3 14.6569 3 13V7Z" stroke="currentColor" strokeWidth="1.5"/>
+                <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.5"/>
+                <path d="M13 7.5L15 7.5M13 12.5L15 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+              </svg>
+            </button>
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileUpload} style={{ display: 'none' }} />
           </div>
         )}
@@ -617,11 +743,123 @@ function OCRLanding() {
           <div className="preview-actions">
             <div className="preview-buttons">
               <button className="btn-secondary" onClick={resetCapture}>Retake</button>
+              <button className="btn-secondary" onClick={handleCropImage}>Crop</button>
               <button className="btn-primary" onClick={processImage}>Process Document</button>
             </div>
           </div>
         )}
       </div>
+
+      {/* Manual Entry Modal */}
+      {showManualEntry && manualEntryData && (
+        <div className="modal-overlay">
+          <div className="modal-card manual-entry-modal">
+            <div className="modal-header warning-header">✏️ Complete Missing Information</div>
+            <div className="modal-body">
+              <p className="info-text">Some fields could not be extracted. Please fill in the missing information:</p>
+              <div className="manual-entry-form">
+                <div className="form-group">
+                  <label>Transaction Reference {!manualEntryData.transactionRef && <span className="required">*</span>}</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.transactionRef || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, transactionRef: e.target.value})}
+                    placeholder="Enter transaction reference"
+                    className={!manualEntryData.transactionRef ? 'missing-field' : ''}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Account Number {!manualEntryData.accountNumber && <span className="required">*</span>}</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.accountNumber || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, accountNumber: e.target.value})}
+                    placeholder="Enter account number"
+                    className={!manualEntryData.accountNumber ? 'missing-field' : ''}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Customer Name {!manualEntryData.customerName && <span className="required">*</span>}</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.customerName || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, customerName: e.target.value})}
+                    placeholder="Enter customer name"
+                    className={!manualEntryData.customerName ? 'missing-field' : ''}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Date {!manualEntryData.date && <span className="required">*</span>}</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.date || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, date: e.target.value})}
+                    placeholder="MM/DD/YYYY or Month Day, Year"
+                    className={!manualEntryData.date ? 'missing-field' : ''}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Electricity Bill {!manualEntryData.electricityBill && <span className="required">*</span>}</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.electricityBill || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, electricityBill: e.target.value})}
+                    placeholder="Enter amount"
+                    className={!manualEntryData.electricityBill ? 'missing-field' : ''}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Amount Due</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.amountDue || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, amountDue: e.target.value})}
+                    placeholder="Enter amount due (optional)"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Total Sales</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.totalSales || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, totalSales: e.target.value})}
+                    placeholder="Enter total sales (optional)"
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Company</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.company || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, company: e.target.value})}
+                    placeholder="Enter company name (optional)"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="btn-secondary" onClick={() => { setShowManualEntry(false); resetCapture(); }}>Cancel</button>
+              <button className="btn-primary" onClick={saveManualEntry}>Continue & Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Image Cropper Modal */}
+      {showCropper && capturedImage && (
+        <div className="modal-overlay">
+          <div className="modal-card cropper-modal">
+            <div className="modal-header">✂️ Crop Image</div>
+            <div className="modal-body cropper-body">
+              <ImageCropper
+                image={capturedImage}
+                onCropComplete={applyCrop}
+                onCancel={cancelCrop}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       {toast && <div className="toast">{toast}</div>}
