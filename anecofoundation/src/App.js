@@ -7,9 +7,9 @@ import Admin from './pages/Admin';
 function App() {
   return (
     <BrowserRouter>
-      <header className="app-header">
+      {/* <header className="app-header">
         <h1 className="title">ANECO Receipt Scanner</h1>
-      </header>
+      </header> */}
 
       <Routes>
         <Route path="/" element={<OCRLanding />} />
