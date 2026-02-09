@@ -1,0 +1,194 @@
+.admin-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f3f1f1;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.logo-wrap {
+  position: absolute;
+  left: 24px;
+  top: 24px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo-circle {
+  width: 78px;
+  height: 78px;
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.logo-circle img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.login-card {
+  width: 380px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 28px 32px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  border: 4px solid rgba(243, 123, 27, 0.15);
+  text-align: center;
+}
+
+.login-card h3 {
+  margin: 0 0 18px 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.login-card label {
+  display: block;
+  text-align: left;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #333;
+}
+
+.login-card input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #ddd;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+  font-size: 14px;
+}
+
+.login-card input:focus {
+  outline: none;
+  border-color: #ff7a1a;
+  box-shadow: 0 0 4px rgba(255, 122, 26, 0.3);
+}
+
+.forgot-link {
+  display: block;
+  text-align: right;
+  color: #ff7a1a;
+  font-size: 12px;
+  text-decoration: none;
+  margin-bottom: 10px;
+  cursor: pointer;
+}
+
+.forgot-link:hover {
+  text-decoration: underline;
+}
+
+.login-btn {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #000;
+  color: #fff;
+  border: none;
+  font-weight: 700;
+  cursor: pointer;
+  font-size: 14px;
+  transition: background 0.3s;
+}
+
+.login-btn:hover {
+  background: #222;
+}
+
+.login-btn:active {
+  background: #000;
+}
+
+.back-link {
+  margin-top: 12px;
+  font-size: 13px;
+}
+
+.back-link a {
+  color: #ff7a1a;
+  text-decoration: none;
+}
+
+.back-link a:hover {
+  text-decoration: underline;
+}
+
+/* Tablet (768px and below) */
+@media (max-width: 768px) {
+  .logo-wrap {
+    left: 16px;
+    top: 16px;
+  }
+
+  .logo-circle {
+    width: 64px;
+    height: 64px;
+  }
+
+  .login-card {
+    width: 90%;
+    max-width: 380px;
+    padding: 24px 28px;
+  }
+
+  .login-card h3 {
+    font-size: 18px;
+  }
+}
+
+/* Mobile (480px and below) */
+@media (max-width: 480px) {
+  .admin-container {
+    padding: 16px;
+  }
+
+  .logo-wrap {
+    left: 12px;
+    top: 12px;
+  }
+
+  .logo-circle {
+    width: 56px;
+    height: 56px;
+  }
+
+  .login-card {
+    width: 100%;
+    padding: 20px 16px;
+  }
+
+  .login-card h3 {
+    font-size: 16px;
+    margin-bottom: 16px;
+  }
+
+  .login-card label {
+    font-size: 12px;
+  }
+
+  .login-card input {
+    padding: 8px 10px;
+    font-size: 16px;
+  }
+
+  .forgot-link {
+    font-size: 11px;
+  }
+
+  .login-btn {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  .back-link {
+    margin-top: 10px;
+    font-size: 12px;
+  }
+}

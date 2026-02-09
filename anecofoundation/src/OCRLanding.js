@@ -108,13 +108,10 @@ function OCRLanding() {
   const [parsedData, setParsedData] = useState(null);
   const [rawText, setRawText] = useState('');
   const [progress, setProgress] = useState(0);
-  const [status, setStatus] = useState('Ready');
-  const [modalType, setModalType] = useState(null);
-  const [errorMessage, setErrorMessage] = useState('');
-  const [toast, setToast] = useState('');
-  const [cameraActive, setCameraActive] = useState(false);
-  const [cameraError, setCameraError] = useState(null);
-  const [rotateView, setRotateView] = useState(0); // degrees to rotate live video for user
+  const [status, setStatus] = useState('Idle');
+  const [saveStatus, setSaveStatus] = useState('');
+  const [showWarning, setShowWarning] = useState(false);
+  const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
   const workerRef = useRef(null);
 
   useEffect(() => {
@@ -153,223 +150,50 @@ function OCRLanding() {
     };
   }, []);
 
-  const startCamera = async () => {
-    try {
-      setCameraError(null);
-      const constraints = {
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      };
-      
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      streamRef.current = stream;
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.onloadedmetadata = () => {
-          setCameraActive(true);
-          setStatus('Ready');
-        };
-      }
-    } catch (err) {
-      setCameraError('Camera access denied. Please enable camera permissions.');
-      setStatus('Camera Error');
-      showToast('❌ ' + err.message);
+  const handleFile = e => {
+    const file = e.target.files[0];
+    if (file) {
+      setImage(file);
+      setPreview(URL.createObjectURL(file));
+      setText('');
+      setProgress(0);
     }
   };
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    setCameraActive(false);
-  };
-
-  const captureFrame = () => {
-    if (!videoRef.current || !canvasRef.current || !cameraActive) return;
-    
-    try {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      
-      // Draw full video frame to canvas
-      // If user rotated the view for easier framing, take that into account by drawing the video normally
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-      
-      // Calculate guide frame position and size relative to video
-      // Guide is 96% width, centered, with aspect-ratio 0.58
-      const guideWidth = canvas.width * 0.96;
-      const guideHeight = guideWidth / 0.58;  // aspect-ratio = width/height = 0.58
-      const guideX = (canvas.width - guideWidth) / 2;  // center horizontally
-      const guideY = (canvas.height - guideHeight) / 2;  // center vertically
-      
-      // Create a new canvas with only the guide area
-      const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = guideWidth;
-      croppedCanvas.height = guideHeight;
-      const croppedCtx = croppedCanvas.getContext('2d');
-      
-      // Copy only the guide region from the original canvas
-      croppedCtx.drawImage(
-        canvas,
-        guideX, guideY, guideWidth, guideHeight,  // source rect
-        0, 0, guideWidth, guideHeight              // dest rect
-      );
-      
-      // Normalize orientation: prefer using device/screen orientation when available
-      let finalCanvas = croppedCanvas;
-      try {
-        let desiredRotation = 0;
-        const screenAngle = (window.screen && window.screen.orientation && typeof window.screen.orientation.angle === 'number')
-          ? window.screen.orientation.angle
-          : (typeof window.orientation === 'number' ? window.orientation : null);
-
-        if (screenAngle !== null) {
-          if (screenAngle === 90) desiredRotation = -90;
-          else if (screenAngle === 270) desiredRotation = 90;
-          else if (screenAngle === 180) desiredRotation = 180;
-        } else if (croppedCanvas.width > croppedCanvas.height) {
-          desiredRotation = 90;
-        }
-
-        if (desiredRotation !== 0) {
-          finalCanvas = rotateCanvas(croppedCanvas, desiredRotation);
-        }
-      } catch (e) {
-        if (croppedCanvas.width > croppedCanvas.height) {
-          finalCanvas = rotateCanvas(croppedCanvas, 90);
-        }
-      }
-
-      const imageData = finalCanvas.toDataURL('image/jpeg', 0.9);
-      setCapturedImage(imageData);
-      stopCamera();
-      setMode('preview');
-    } catch (err) {
-      showToast('❌ Failed to capture image');
-    }
-  };
-
-  // Allow rotating the live preview (for user's framing convenience)
-  const rotateLiveView = () => {
-    setRotateView(prev => (prev + 90) % 360);
-  };
-
-  // Rotate the captured image in preview before processing/saving
-  const rotateCapturedPreview = async () => {
-    if (!capturedImage) return;
-    const img = new Image();
-    img.onload = () => {
-      const tmp = document.createElement('canvas');
-      tmp.width = img.width;
-      tmp.height = img.height;
-      const ctx = tmp.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      const rotated = rotateCanvas(tmp, 90);
-      setCapturedImage(rotated.toDataURL('image/jpeg', 0.9));
-    };
-    img.src = capturedImage;
-  };
-
-  // Trigger file input (visible upload button)
-  const openFilePicker = () => fileInputRef.current?.click();
-
-
-  const processImage = async () => {
-    if (!capturedImage || !workerRef.current) {
-      showToast('❌ No image to process');
+  const doOCR = async () => {
+    if (!workerRef.current) return;
+    if (!image) {
+      setStatus('Select an image first');
       return;
     }
-
-    setMode('processing');
-    setStatus('Analyzing document...');
-    setProgress(0);
-    setModalType(null);
-
+    setStatus('Recognizing text');
+    setText('Recognizing...');
+    setParsedData(null);
+    setShowWarning(false);
+    setShowDuplicateWarning(false);
     try {
-      const img = new Image();
-      img.onload = async () => {
+      const { data: { text: t } } = await workerRef.current.recognize(image);
+      setText(t);
+      // Parse the extracted text
+      const parsed = parseOCRText(t);
+      setParsedData(parsed);
+      
+      // Check if electricity bill is less than 50
+      if (parsed.electricityBill) {
+        const billAmount = parseFloat(parsed.electricityBill.replace(/,/g, ''));
+        if (billAmount < 50) {
+          setShowWarning(true);
+        }
+      }
+
+      // Check if transaction ref already exists in database
+      if (parsed.transactionRef) {
         try {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0);
-
-          const { data: { text: t } } = await workerRef.current.recognize(canvas);
-          setRawText(t);
-          alert(t);
-          const parsed = parseOCRText(t);
-          setParsedData(parsed);
-
-          let isValid = true;
-          let issue = '';
-
-          if (!parsed.transactionRef) {
-            isValid = false;
-            issue = '❌ Transaction reference not found';
-          } else {
-            // Require at least 15 digits in the transaction reference
-            const digitCount = (parsed.transactionRef.match(/\d/g) || []).length;
-            if (digitCount < 15) {
-              isValid = false;
-              issue = '❌ Transaction reference must contain at least 15 digits';
-            }
+          const res = await fetch(`http://localhost:3001/api/check-transaction/${parsed.transactionRef}`);
+          const data = await res.json();
+          if (data.exists) {
+            setShowDuplicateWarning(true);
           }
-
-          if (isValid && !parsed.accountNumber) {
-            isValid = false;
-            issue = '❌ Account number not found';
-          }
-
-          if (isValid && parsed.electricityBill) {
-            const billAmount = parseFloat(parsed.electricityBill.replace(/,/g, ''));
-            if (billAmount < 50) {
-              isValid = false;
-              issue = `⚠️ Bill (₱${parsed.electricityBill}) is less than ₱50`;
-            }
-          }
-
-          if (isValid && parsed.transactionRef) {
-            try {
-              const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-              console.log('[ocr] Checking duplicate transaction at', `${API_BASE}/api/check-transaction/${parsed.transactionRef}`);
-              const res = await fetch(`${API_BASE}/api/check-transaction/${parsed.transactionRef}`);
-              if (!res.ok) {
-                console.error('[api] check-transaction non-OK response', res.status, await res.text());
-              } else {
-                const data = await res.json();
-                console.log('[api] check-transaction result:', data);
-                if (data.exists) {
-                  setModalType('duplicate');
-                  setErrorMessage(`Transaction already exists`);
-                  setMode('preview');
-                  setStatus('Ready');
-                  return;
-                }
-              }
-            } catch (err) {
-              console.error('[api] Duplicate check failed:', err.message || err);
-              showToast('⚠️ Could not verify duplicate transaction (network error).');
-            }
-
-            setModalType('success');
-          } else {
-            setModalType('error');
-            setErrorMessage(issue);
-          }
-
-          setMode('preview');
-          setStatus('Ready');
-          setProgress(100);
         } catch (err) {
           setModalType('error');
           setErrorMessage(`Processing error`);
@@ -384,6 +208,38 @@ function OCRLanding() {
       setMode('preview');
       setStatus('Ready');
     }
+  };
+
+  // Helper function to rotate image using canvas
+  const rotateImageFile = (file, degrees) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+
+          if (degrees === 90 || degrees === 270) {
+            canvas.width = img.height;
+            canvas.height = img.width;
+          } else {
+            canvas.width = img.width;
+            canvas.height = img.height;
+          }
+
+          ctx.translate(canvas.width / 2, canvas.height / 2);
+          ctx.rotate((degrees * Math.PI) / 180);
+          ctx.drawImage(img, -img.width / 2, -img.height / 2);
+
+          canvas.toBlob((blob) => {
+            resolve(blob);
+          }, 'image/jpeg', 0.95);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   const saveToDatabase = async () => {
@@ -454,28 +310,24 @@ function OCRLanding() {
         <h1>Aneco Document Scanner</h1>
       </div>
 
-      {/* Main Content */}
-      {mode === 'capture' && (
-        <div className="capture-container">
-          {cameraError ? (
-            <div className="error-state">
-              <p className="error-text">{cameraError}</p>
-              <button className="btn-retry" onClick={startCamera}>🔄 Retry Camera</button>
-              <button className="btn-file" onClick={() => fileInputRef.current?.click()}>📁 Choose File</button>
-              <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileUpload} style={{ display: 'none' }} />
-            </div>
-          ) : (
-            <>
-              <video ref={videoRef} autoPlay playsInline muted className="camera-feed" style={{ transform: `rotate(${rotateView}deg)` }} />
-              <div className="document-overlay">
-                <p className="instruction-text">Position document within the frame</p>
-                <div className="document-frame">
-                  <div className="corner corner-tl"></div>
-                  <div className="corner corner-tr"></div>
-                  <div className="corner corner-bl"></div>
-                  <div className="corner corner-br"></div>
-                </div>
-                <p className="hint-text">Ensure text is clear and readable</p>
+        <div className="status-row">
+          <div className="status">Status: <strong>{status}</strong></div>
+          <div className="progress">Progress: <strong>{progress}%</strong></div>
+        </div>
+
+        {preview && (
+          <div className="preview">
+            <img src={preview} alt="preview" />
+          </div>
+        )}
+
+        {/* Warning Modal */}
+        {showWarning && (
+          <div className="modal-overlay" onClick={() => setShowWarning(false)}>
+            <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>⚠️ Low Electricity Bill Warning</h2>
+                <button className="modal-close" onClick={() => setShowWarning(false)}>&times;</button>
               </div>
             </>
           )}
