@@ -71,12 +71,12 @@
 
 .dashboard-card {
   background: #fff;
-  border: 6px solid #f68b40;
   border-radius: 12px;
   padding: 32px;
   width: 100%;
   max-width: 1200px;
-  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  border: 4px solid rgba(243, 123, 27, 0.15);
   transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
