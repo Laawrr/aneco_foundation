@@ -14,6 +14,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Admin access code (from ENV or default)
+const ADMIN_CODE = process.env.ADMIN_CODE || 'ANEC0491977';
+
 let worker;
 
 (async () => {
@@ -48,6 +51,21 @@ const { testConnection, getConnection, pool } = require('./db');
 app.get('/health', async (req, res) => {
   const db = await testConnection();
   res.json({ ok: true, env: process.env.NODE_ENV || 'development', db });
+});
+
+// Simple login endpoint that validates the admin code
+app.post('/api/login', (req, res) => {
+  const { code } = req.body || {};
+
+  if (!code) {
+    return res.status(400).json({ ok: false, error: 'Code is required' });
+  }
+
+  if (code === ADMIN_CODE) {
+    return res.json({ ok: true });
+  }
+
+  return res.status(401).json({ ok: false, error: 'Invalid code' });
 });
 
 app.post('/ocr', upload.single('image'), async (req, res) => {
@@ -141,6 +159,151 @@ app.post('/api/ocr-data', async (req, res) => {
     res.json({ ok: true, id: result.insertId, message: 'Data saved successfully' });
   } catch (err) {
     console.error('[api] Error saving OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
+    res.status(500).json({ ok: false, error: String(err) });
+  } finally {
+    if (conn) conn && conn.release();
+  }
+});
+
+// Endpoint to fetch OCR data for the dashboard
+app.get('/api/ocr-data', async (req, res) => {
+  const { limit } = req.query;
+  const rowLimit = Number(limit) && Number(limit) > 0 ? Number(limit) : 100;
+
+  let conn;
+  try {
+    conn = await getConnection();
+
+    // Ensure table exists (in case only reads are done before any writes)
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS ocr_data (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        transaction_ref VARCHAR(100),
+        account_number VARCHAR(100),
+        customer_name VARCHAR(255),
+        company VARCHAR(255),
+        date VARCHAR(50),
+        electricity_bill DECIMAL(10, 2),
+        amount_due DECIMAL(10, 2),
+        total_sales DECIMAL(10, 2),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    const [rows] = await conn.query(
+      `SELECT
+         id,
+         transaction_ref   AS transactionRef,
+         account_number    AS accountNumber,
+         customer_name     AS customerName,
+         company,
+         date,
+         electricity_bill  AS electricityBill,
+         amount_due        AS amountDue,
+         total_sales       AS totalSales,
+         created_at        AS createdAt
+       FROM ocr_data
+       ORDER BY id ASC
+       LIMIT ?`,
+      [rowLimit]
+    );
+
+    res.json({ ok: true, data: rows });
+  } catch (err) {
+    console.error('[api] Error fetching OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
+    res.status(500).json({ ok: false, error: String(err) });
+  } finally {
+    if (conn) conn && conn.release();
+  }
+});
+
+// Endpoint to update an existing OCR row
+app.put('/api/ocr-data/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) {
+    return res.status(400).json({ ok: false, error: 'Invalid id' });
+  }
+
+  const {
+    transactionRef,
+    accountNumber,
+    customerName,
+    date,
+    electricityBill,
+    amountDue,
+    totalSales,
+    company,
+  } = req.body;
+
+  let conn;
+  try {
+    conn = await getConnection();
+
+    // Ensure table exists
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS ocr_data (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        transaction_ref VARCHAR(100),
+        account_number VARCHAR(100),
+        customer_name VARCHAR(255),
+        company VARCHAR(255),
+        date VARCHAR(50),
+        electricity_bill DECIMAL(10, 2),
+        amount_due DECIMAL(10, 2),
+        total_sales DECIMAL(10, 2),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    const [result] = await conn.query(
+      `UPDATE ocr_data
+       SET transaction_ref = ?,
+           account_number  = ?,
+           customer_name   = ?,
+           company         = ?,
+           date            = ?,
+           electricity_bill= ?,
+           amount_due      = ?,
+           total_sales     = ?
+       WHERE id = ?`,
+      [
+        transactionRef || null,
+        accountNumber || null,
+        customerName || null,
+        company || null,
+        date || null,
+        electricityBill != null ? parseFloat(String(electricityBill).replace(/,/g, '')) : null,
+        amountDue != null ? parseFloat(String(amountDue).replace(/,/g, '')) : null,
+        totalSales != null ? parseFloat(String(totalSales).replace(/,/g, '')) : null,
+        id,
+      ]
+    );
+
+    res.json({ ok: true, affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error('[api] Error updating OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
+    res.status(500).json({ ok: false, error: String(err) });
+  } finally {
+    if (conn) conn && conn.release();
+  }
+});
+
+// Endpoint to delete an existing OCR row
+app.delete('/api/ocr-data/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) {
+    return res.status(400).json({ ok: false, error: 'Invalid id' });
+  }
+
+  let conn;
+  try {
+    conn = await getConnection();
+
+    const [result] = await conn.query('DELETE FROM ocr_data WHERE id = ?', [id]);
+
+    res.json({ ok: true, affectedRows: result.affectedRows });
+  } catch (err) {
+    console.error('[api] Error deleting OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
     res.status(500).json({ ok: false, error: String(err) });
   } finally {
     if (conn) conn && conn.release();
