@@ -66,6 +66,7 @@ function OCRLanding() {
   const [saveStatus, setSaveStatus] = useState('');
   const [showWarning, setShowWarning] = useState(false);
   const [showDuplicateWarning, setShowDuplicateWarning] = useState(false);
+  const [rotation, setRotation] = useState(0); // Track rotation in degrees (0, 90, 180, 270)
   const workerRef = useRef(null);
 
   useEffect(() => {
@@ -97,10 +98,19 @@ function OCRLanding() {
     const file = e.target.files[0];
     if (file) {
       setImage(file);
+      setRotation(0); // Reset rotation when new image is selected
       setPreview(URL.createObjectURL(file));
       setText('');
       setProgress(0);
     }
+  };
+
+  const rotateImage = () => {
+    setRotation((prev) => (prev + 90) % 360);
+  };
+
+  const resetRotation = () => {
+    setRotation(0);
   };
 
   const doOCR = async () => {
@@ -115,7 +125,13 @@ function OCRLanding() {
     setShowWarning(false);
     setShowDuplicateWarning(false);
     try {
-      const { data: { text: t } } = await workerRef.current.recognize(image);
+      // Apply rotation if needed
+      let imageToProcess = image;
+      if (rotation !== 0) {
+        imageToProcess = await rotateImageFile(image, rotation);
+      }
+
+      const { data: { text: t } } = await workerRef.current.recognize(imageToProcess);
       setText(t);
       // Parse the extracted text
       const parsed = parseOCRText(t);
@@ -148,6 +164,38 @@ function OCRLanding() {
       setStatus('Error');
       setText(String(err));
     }
+  };
+
+  // Helper function to rotate image using canvas
+  const rotateImageFile = (file, degrees) => {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+
+          if (degrees === 90 || degrees === 270) {
+            canvas.width = img.height;
+            canvas.height = img.width;
+          } else {
+            canvas.width = img.width;
+            canvas.height = img.height;
+          }
+
+          ctx.translate(canvas.width / 2, canvas.height / 2);
+          ctx.rotate((degrees * Math.PI) / 180);
+          ctx.drawImage(img, -img.width / 2, -img.height / 2);
+
+          canvas.toBlob((blob) => {
+            resolve(blob);
+          }, 'image/jpeg', 0.95);
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   const saveToDatabase = async () => {
@@ -190,7 +238,12 @@ function OCRLanding() {
 
         {preview && (
           <div className="preview">
-            <img src={preview} alt="preview" />
+            <img src={preview} alt="preview" style={{ transform: `rotate(${rotation}deg)` }} />
+            <div className="preview-controls">
+              <button onClick={rotateImage} className="btn btn-small" title="Rotate 90° clockwise">↻ Rotate</button>
+              {rotation !== 0 && <button onClick={resetRotation} className="btn btn-small btn-secondary" title="Reset rotation">Reset</button>}
+            </div>
+            {rotation !== 0 && <p className="rotation-info">Rotation: {rotation}°</p>}
           </div>
         )}
 
