@@ -340,12 +340,14 @@ function OCRLanding() {
 
           if (isValid && parsed.transactionRef) {
             try {
-              const API_BASE = process.env.REACT_APP_API_URL || 'https://localhost:3000';
+              const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+              console.log('[ocr] Checking duplicate transaction at', `${API_BASE}/api/check-transaction/${parsed.transactionRef}`);
               const res = await fetch(`${API_BASE}/api/check-transaction/${parsed.transactionRef}`);
               if (!res.ok) {
                 console.error('[api] check-transaction non-OK response', res.status, await res.text());
               } else {
                 const data = await res.json();
+                console.log('[api] check-transaction result:', data);
                 if (data.exists) {
                   setModalType('duplicate');
                   setErrorMessage(`Transaction already exists`);
@@ -355,7 +357,7 @@ function OCRLanding() {
                 }
               }
             } catch (err) {
-              console.error('[api] Duplicate check failed:', err);
+              console.error('[api] Duplicate check failed:', err.message || err);
               showToast('⚠️ Could not verify duplicate transaction (network error).');
             }
 
@@ -392,7 +394,8 @@ function OCRLanding() {
 
     setStatus('Saving...');
     try {
-      const API_BASE = process.env.REACT_APP_API_URL || 'https://localhost:3000';
+      const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+      console.log('[ocr] Saving to database at', `${API_BASE}/api/ocr-data`);
       const res = await fetch(`${API_BASE}/api/ocr-data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -400,17 +403,19 @@ function OCRLanding() {
       });
 
       if (res.ok) {
+        const data = await res.json();
+        console.log('[api] save-ocr-data success:', data);
         showToast('✅ Saved successfully');
         setModalType(null);
         resetCapture();
       } else {
         const text = await res.text().catch(() => '');
         console.error('[api] save-ocr-data failed', res.status, text);
-        showToast('❌ Failed to save (server error)');
+        showToast(`❌ Failed to save: ${res.status}`);
       }
     } catch (err) {
-      console.error('[api] save-ocr-data network error:', err);
-      showToast(`❌ Network error: ${err && err.message ? err.message : String(err)}`);
+      console.error('[api] save-ocr-data network error:', err.message || err);
+      showToast(`❌ Network error: ${err && err.message ? err.message : 'Failed to fetch'}`);
     }
     setStatus('Ready');
   };
