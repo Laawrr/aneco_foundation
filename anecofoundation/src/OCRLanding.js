@@ -306,7 +306,6 @@ function OCRLanding() {
 
           const { data: { text: t } } = await workerRef.current.recognize(canvas);
           setRawText(t);
-          alert(t);
           const parsed = parseOCRText(t);
           setParsedData(parsed);
 
