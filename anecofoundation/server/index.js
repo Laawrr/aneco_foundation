@@ -43,7 +43,7 @@ let worker;
   }
 })();
 
-const { testConnection, pool } = require('./db');
+const { testConnection, getConnection, pool } = require('./db');
 
 app.get('/health', async (req, res) => {
   const db = await testConnection();
@@ -80,27 +80,32 @@ app.post('/ocr', upload.single('image'), async (req, res) => {
 // Endpoint to check if transaction ref already exists
 app.get('/api/check-transaction/:transactionRef', async (req, res) => {
   const { transactionRef } = req.params;
-  const conn = await pool.getConnection();
+  console.log(`[api] check-transaction requested: transactionRef=${transactionRef}`);
+  let conn;
   try {
+    conn = await getConnection();
     const [rows] = await conn.query(
       'SELECT COUNT(*) as count FROM ocr_data WHERE transaction_ref = ?',
       [transactionRef]
     );
     const exists = rows[0].count > 0;
+    console.log(`[api] check-transaction result: count=${rows[0].count}`);
     res.json({ exists, count: rows[0].count });
   } catch (err) {
-    console.error('Error checking transaction:', err);
+    console.error('[api] Error checking transaction:', err && err.code ? `${err.code}: ${err.message}` : err);
     res.status(500).json({ ok: false, error: String(err) });
   } finally {
-    conn.release();
+    if (conn) conn && conn.release();
   }
 });
 
 // Endpoint to save parsed OCR data to database
 app.post('/api/ocr-data', async (req, res) => {
   const { transactionRef, accountNumber, customerName, date, electricityBill, amountDue, totalSales, company } = req.body;
-  const conn = await pool.getConnection();
+  console.log('[api] save-ocr-data requested', { transactionRef, accountNumber, customerName, date, electricityBill, amountDue, totalSales, company });
+  let conn;
   try {
+    conn = await getConnection();
     // Ensure table exists with all fields
     await conn.query(`
       CREATE TABLE IF NOT EXISTS ocr_data (
@@ -131,13 +136,14 @@ app.post('/api/ocr-data', async (req, res) => {
         totalSales ? parseFloat(totalSales.replace(/,/g, '')) : null
       ]
     );
+    console.log('[api] OCR data saved, id=', result.insertId);
     
     res.json({ ok: true, id: result.insertId, message: 'Data saved successfully' });
   } catch (err) {
-    console.error('Error saving OCR data:', err);
+    console.error('[api] Error saving OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
     res.status(500).json({ ok: false, error: String(err) });
   } finally {
-    conn.release();
+    if (conn) conn && conn.release();
   }
 });
 
