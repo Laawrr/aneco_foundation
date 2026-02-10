@@ -8,6 +8,8 @@ export default function Dashboard() {
   const [isEditMode, setIsEditMode] = useState(false);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
   const [showMobileExportSubmenu, setShowMobileExportSubmenu] = useState(false);
+  const [pdfFormat, setPdfFormat] = useState('a4'); // Default to A4
+  const [showFormatMenu, setShowFormatMenu] = useState(false);
   // Table rows are fully dynamic; start empty and fill from the API.
   // Each row may have an 'id' when it exists in the database.
   const [tableData, setTableData] = useState([]);
@@ -39,9 +41,11 @@ export default function Dashboard() {
     const handleClickOutside = (event) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
         setShowExportMenu(false);
+        setShowFormatMenu(false);
       }
       if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target)) {
         setShowMobileMenu(false);
+        setShowMobileExportSubmenu(false);
       }
     };
 
@@ -112,6 +116,22 @@ export default function Dashboard() {
   }, [isEditMode, isAuthenticated]);
 
   const handleCellChange = (rowToUpdate, columnKey, value) => {
+    // Validate amount field to only allow numbers and decimal point
+    if (columnKey === 'amount') {
+      // Only allow numbers, single decimal point, and empty string
+      // Regex: allows digits with optional single decimal point (e.g., "123", "123.45", ".5")
+      // Prevents letters, multiple decimal points, and other special characters
+      const numberRegex = /^(\d+\.?\d*|\.\d+|)$/;
+      if (value !== '' && !numberRegex.test(value)) {
+        return; // Don't update if invalid
+      }
+      // Additional check: prevent multiple decimal points
+      const decimalCount = (value.match(/\./g) || []).length;
+      if (decimalCount > 1) {
+        return; // Don't update if more than one decimal point
+      }
+    }
+    
     setTableData((prev) => {
       const newData = [...prev];
       // Find the original index of the row
@@ -272,36 +292,251 @@ export default function Dashboard() {
     }
   };
 
-  const exportToPDF = () => {
+  const exportToPDF = async () => {
     try {
-      const html2pdf = require('html2pdf.js');
-      const content = pdfRef.current;
+      const { jsPDF } = require('jspdf');
+      require('jspdf-autotable');
+      
+      // Create new PDF document with selected format
+      // Supported formats: 'a4', 'letter', 'legal', 'a3', 'a5', 'tabloid'
+      const formatMap = {
+        'a4': 'a4',
+        'letter': [216, 279], // Letter size in mm (8.5" x 11")
+        'legal': [216, 330], // Philippine Legal size in mm (8.5" x 13")
+        'a3': 'a3',
+        'a5': 'a5',
+        'tabloid': [279, 432] // Tabloid size in mm (11" x 17")
+      };
+      
+      const selectedFormat = formatMap[pdfFormat] || 'a4';
+      
+      const doc = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: selectedFormat,
+        compress: true
+      });
 
-      if (!content) return;
+      // Get page dimensions (adaptive to any page size)
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      
+      // Use percentage-based margins and sizing for better adaptability
+      // These will scale proportionally when printed on different paper sizes
+      const margin = Math.max(10, pageWidth * 0.05); // 5% margin, minimum 10mm
+      const logoSize = Math.min(25, pageWidth * 0.08); // Adaptive logo size (8% of page width, max 25mm)
+      
+      // Set PDF properties for better print scaling
+      doc.setProperties({
+        title: 'Dashboard Export',
+        subject: 'ANECO Foundation Report',
+        author: 'ANECO',
+        keywords: 'dashboard, report, export',
+        creator: 'ANECO Dashboard'
+      });
+      
+      // Get header information
+      const currentDate = new Date()
+        .toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' })
+        .replace(/\s/g, '-');
 
-      // Hide search container before export
-      const searchContainer = content.querySelector('.no-export');
-      if (searchContainer) {
-        searchContainer.style.display = 'none';
-      }
-
-      const options = {
-        margin: [15, 15, 15, 15],
-        filename: 'dashboard_export.pdf',
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2, useCORS: true, logging: false },
-        jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' },
+      // Load logo image asynchronously
+      const loadLogo = () => {
+        return new Promise((resolve) => {
+          const logo = new Image();
+          logo.crossOrigin = 'anonymous';
+          logo.src = '/aneco2.png';
+          
+          logo.onload = () => {
+            try {
+              // Calculate logo dimensions maintaining aspect ratio
+              const imgAspectRatio = logo.height / logo.width;
+              const imgWidth = logoSize;
+              const imgHeight = logoSize * imgAspectRatio;
+              
+              // Add logo in top-left corner
+              doc.addImage(logo, 'PNG', margin, margin, imgWidth, imgHeight);
+              resolve({ imgHeight, logo, imgWidth });
+            } catch (err) {
+              console.warn('Could not add logo:', err);
+              resolve({ imgHeight: 0, logo: null, imgWidth: 0 });
+            }
+          };
+          
+          logo.onerror = () => {
+            console.warn('Logo image failed to load');
+            resolve({ imgHeight: 0, logo: null, imgWidth: 0 });
+          };
+          
+          // Timeout after 3 seconds
+          setTimeout(() => resolve({ imgHeight: 0, logo: null, imgWidth: 0 }), 3000);
+        }); 
       };
 
-      html2pdf().set(options).from(content).save().then(() => {
-        // Restore search container visibility after export
-        if (searchContainer) {
-          searchContainer.style.display = 'block';
+      // Wait for logo to load
+      const { imgHeight, logo: loadedLogo, imgWidth: logoWidth } = await loadLogo();
+      
+      // Adaptive font sizes based on page width
+      const baseFontSize = Math.max(8, Math.min(14, pageWidth * 0.04));
+      const titleFontSize = Math.max(10, Math.min(16, pageWidth * 0.045));
+      const headerFontSize = Math.max(9, Math.min(14, pageWidth * 0.042));
+      
+      // Calculate header row Y position (align logo, company name, and date horizontally)
+      const headerRowY = margin + (imgHeight > 0 ? imgHeight / 2 : titleFontSize / 2);
+      
+      // Date (right aligned, horizontally aligned with logo and company name)
+      doc.setFontSize(baseFontSize);
+      doc.setFont(undefined, 'bold');
+      doc.text(currentDate, pageWidth - margin, headerRowY, { align: 'right' });
+      
+      // Company name with address, event title and detail (centered, horizontally aligned with logo and date)
+      doc.setFontSize(titleFontSize);
+      doc.setFont(undefined, 'bold');
+      const companyName = 'AGUSAN DEL NORTE ELECTRIC COOPERATIVE, INC.';
+      const companyAddress = 'Km. 2, J.C. Aquino Avenue, Butuan City';
+      const eventTitle = 'GIVING OF GROCERY ITEMS TO MEMBER-CONSUMERS';
+      const eventDetail = 'DURING 49TH ANNIVERSARY 2026';
+      
+      // Draw company name, address, event title, and event detail together, centered
+      let currentY = headerRowY;
+      doc.text(companyName, pageWidth / 2, currentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+      currentY += titleFontSize * 0.6;
+      
+      doc.setFontSize(baseFontSize);
+      doc.text(companyAddress, pageWidth / 2, currentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+      currentY += baseFontSize * 0.8;
+      // Add break line after company address
+      currentY += baseFontSize * 0.5; // Extra spacing for line break
+      
+      doc.setFontSize(headerFontSize);
+      doc.setFont(undefined, 'bold');
+      doc.text(eventTitle, pageWidth / 2, currentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+      currentY += headerFontSize * 0.7;
+      
+      doc.setFontSize(headerFontSize);
+      doc.text(eventDetail, pageWidth / 2, currentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+      
+      // Calculate starting Y position for content below header row (minimize gap)
+      let yPos = currentY + headerFontSize * 0.5; // Minimal spacing after event detail
+
+      // Prepare table data
+      const tableBody = filteredTableData.map((row, index) => [
+        String(index + 1),
+        row.accountNumber || '',
+        row.accountName || '',
+        row.referenceNo || '',
+        row.amount || ''
+      ]);
+
+      // Calculate table column widths (adaptive to page width - percentage-based)
+      // All measurements are relative to page width for scalability across different paper sizes
+      const availableWidth = pageWidth - (margin * 2);
+      const tableFontSize = Math.max(7, Math.min(10, pageWidth * 0.025)); // 2.5% of page width
+      
+      // Adaptive column widths (percentages of available width)
+      const columnWidths = {
+        0: availableWidth * 0.08,  // NO. - 8%
+        1: availableWidth * 0.22, // ACCOUNT NUMBER - 22%
+        2: availableWidth * 0.30, // ACCOUNT NAME - 30%
+        3: availableWidth * 0.22, // REFERENCE NO. - 22%
+        4: availableWidth * 0.18  // AMOUNT - 18%
+      };
+
+      // Add table using autoTable
+      doc.autoTable({
+        head: [['NO.', 'ACCOUNT NUMBER', 'ACCOUNT NAME', 'REFERENCE NO.', 'AMOUNT']],
+        body: tableBody,
+        startY: yPos,
+        margin: { left: margin, right: margin, top: yPos },
+        styles: {
+          fontSize: tableFontSize,
+          cellPadding: Math.max(1.5, tableFontSize * 0.3),
+          overflow: 'linebreak',
+          cellWidth: 'auto',
+          lineWidth: 0.5,
+          lineColor: [102, 102, 102],
+          textColor: [0, 0, 0]
+        },
+        headStyles: {
+          fillColor: [255, 255, 255],
+          textColor: [0, 0, 0],
+          fontStyle: 'bold',
+          fontSize: tableFontSize,
+          halign: 'center',
+          lineWidth: 0.5,
+          lineColor: [102, 102, 102]
+        },
+        bodyStyles: {
+          textColor: [0, 0, 0],
+          fontSize: tableFontSize,
+          halign: 'center',
+          lineWidth: 0.5,
+          lineColor: [102, 102, 102]
+        },
+        columnStyles: {
+          0: { cellWidth: columnWidths[0], halign: 'center' },
+          1: { cellWidth: columnWidths[1], halign: 'center' },
+          2: { cellWidth: columnWidths[2], halign: 'center' },
+          3: { cellWidth: columnWidths[3], halign: 'center' },
+          4: { cellWidth: columnWidths[4], halign: 'center' }
+        },
+        alternateRowStyles: {
+          fillColor: [255, 255, 255]
+        },
+        tableWidth: availableWidth,
+        showHead: 'everyPage',
+        rowPageBreak: 'avoid', // Prevent rows from breaking across pages
+        didDrawPage: function (data) {
+          // Add header on each page (logo, company name, date - all horizontally aligned)
+          if (data.pageNumber > 1) {
+            const pageY = margin;
+            const headerRowY = margin + (imgHeight > 0 ? imgHeight / 2 : titleFontSize / 2);
+            
+            // Logo on subsequent pages
+            if (loadedLogo) {
+              try {
+                doc.addImage(loadedLogo, 'PNG', margin, pageY, logoWidth, imgHeight);
+              } catch (err) {
+                // Ignore errors on subsequent pages
+              }
+            }
+            
+            // Company name with address, event title and detail on subsequent pages (horizontally aligned with logo and date)
+            // Use same font sizes as first page for consistency
+            let subsequentY = headerRowY;
+            doc.setFontSize(titleFontSize);
+            doc.setFont(undefined, 'bold');
+            doc.text(companyName, pageWidth / 2, subsequentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+            subsequentY += titleFontSize * 0.6;
+            
+            doc.setFontSize(baseFontSize);
+            doc.text(companyAddress, pageWidth / 2, subsequentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+            subsequentY += baseFontSize * 0.8;
+            // Add break line after company address
+            subsequentY += baseFontSize * 0.5; // Extra spacing for line break
+            
+            doc.setFontSize(headerFontSize);
+            doc.setFont(undefined, 'bold');
+            doc.text(eventTitle, pageWidth / 2, subsequentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+            subsequentY += headerFontSize * 0.7;
+            
+            doc.setFontSize(headerFontSize);
+            doc.text(eventDetail, pageWidth / 2, subsequentY, { align: 'center', maxWidth: pageWidth - (margin * 2) });
+            
+            // Date on subsequent pages (horizontally aligned with logo and company name)
+            doc.setFontSize(baseFontSize);
+            doc.setFont(undefined, 'bold');
+            doc.text(currentDate, pageWidth - margin, headerRowY, { align: 'right' });
+          }
         }
       });
+
+      // Save the PDF
+      doc.save('dashboard_export.pdf');
       setShowExportMenu(false);
     } catch (error) {
-      alert('Please install html2pdf package: npm install html2pdf.js');
+      console.error('Failed to export PDF:', error);
+      alert('Please install jspdf and jspdf-autotable packages: npm install jspdf jspdf-autotable');
     }
   };
 
@@ -375,16 +610,46 @@ export default function Dashboard() {
                       >
                         📊 Export as Excel
                       </button>
+                      <div className="mobile-menu-item" style={{ padding: 0 }}>
+                        <div style={{ padding: '8px 40px', fontSize: '12px', color: '#666', fontWeight: 600 }}>
+                          PDF Paper Size:
+                        </div>
                       <button
                         className="mobile-menu-item mobile-menu-button"
-                        onClick={() => {
-                          exportToPDF();
-                          setShowMobileExportSubmenu(false);
-                          setShowMobileMenu(false);
-                        }}
-                      >
-                        📄 Export as PDF
+                          onClick={() => { setPdfFormat('a4'); exportToPDF(); setShowMobileExportSubmenu(false); setShowMobileMenu(false); }}
+                          style={{ fontWeight: pdfFormat === 'a4' ? 'bold' : 'normal' }}
+                        >
+                          📄 A4 {pdfFormat === 'a4' ? '✓' : ''}
+                        </button>
+                        <button
+                          className="mobile-menu-item mobile-menu-button"
+                          onClick={() => { setPdfFormat('letter'); exportToPDF(); setShowMobileExportSubmenu(false); setShowMobileMenu(false); }}
+                          style={{ fontWeight: pdfFormat === 'letter' ? 'bold' : 'normal' }}
+                        >
+                          📄 Letter {pdfFormat === 'letter' ? '✓' : ''}
+                        </button>
+                        <button
+                          className="mobile-menu-item mobile-menu-button"
+                          onClick={() => { setPdfFormat('legal'); exportToPDF(); setShowMobileExportSubmenu(false); setShowMobileMenu(false); }}
+                          style={{ fontWeight: pdfFormat === 'legal' ? 'bold' : 'normal' }}
+                        >
+                          📄 Legal (PH) {pdfFormat === 'legal' ? '✓' : ''}
+                        </button>
+                        <button
+                          className="mobile-menu-item mobile-menu-button"
+                          onClick={() => { setPdfFormat('a3'); exportToPDF(); setShowMobileExportSubmenu(false); setShowMobileMenu(false); }}
+                          style={{ fontWeight: pdfFormat === 'a3' ? 'bold' : 'normal' }}
+                        >
+                          📄 A3 {pdfFormat === 'a3' ? '✓' : ''}
+                        </button>
+                        <button
+                          className="mobile-menu-item mobile-menu-button"
+                          onClick={() => { setPdfFormat('a5'); exportToPDF(); setShowMobileExportSubmenu(false); setShowMobileMenu(false); }}
+                          style={{ fontWeight: pdfFormat === 'a5' ? 'bold' : 'normal' }}
+                        >
+                          📄 A5 {pdfFormat === 'a5' ? '✓' : ''}
                       </button>
+                      </div>
                     </div>
                   )}
                   <div className="mobile-menu-divider"></div>
@@ -430,7 +695,7 @@ export default function Dashboard() {
       <main className="dashboard-main">
         <div className="dashboard-card">
           <div className="card-header">
-            <h1></h1>
+            <h1 className="sr-only"></h1>
             <div className="button-group">
               {!isEditMode ? (
                 <button className="btn-edit" onClick={() => setIsEditMode(true)}>Edit</button>
@@ -444,14 +709,72 @@ export default function Dashboard() {
                 <div className="export-container" ref={exportMenuRef}>
                   <button 
                     className="btn-export" 
-                    onClick={() => setShowExportMenu(!showExportMenu)}
+                    onClick={() => {
+                      setShowExportMenu(!showExportMenu);
+                      setShowFormatMenu(false);
+                    }}
                   >
                     Export
                   </button>
                   {showExportMenu && (
                     <div className="export-menu">
                       <button onClick={exportToExcel} className="export-option">📊 Export as Excel</button>
-                      <button onClick={exportToPDF} className="export-option">📄 Export as PDF</button>
+                      <div className="export-option" style={{ padding: 0 }}>
+                        <button 
+                          onClick={() => setShowFormatMenu(!showFormatMenu)} 
+                          className="export-option"
+                          style={{ width: '100%', textAlign: 'left', padding: '14px 20px' }}
+                        >
+                          📄 Export as PDF {showFormatMenu ? '▼' : '▶'}
+                        </button>
+                        {showFormatMenu && (
+                          <div className="pdf-format-submenu">
+                            <div className="pdf-format-label">Paper Size:</div>
+                            <button 
+                              onClick={() => { setPdfFormat('a4'); exportToPDF(); setShowExportMenu(false); setShowFormatMenu(false); }} 
+                              className="format-option"
+                              style={{ fontWeight: pdfFormat === 'a4' ? 'bold' : 'normal' }}
+                            >
+                              A4 {pdfFormat === 'a4' ? '✓' : ''}
+                            </button>
+                            <button 
+                              onClick={() => { setPdfFormat('letter'); exportToPDF(); setShowExportMenu(false); setShowFormatMenu(false); }} 
+                              className="format-option"
+                              style={{ fontWeight: pdfFormat === 'letter' ? 'bold' : 'normal' }}
+                            >
+                              Letter (US) {pdfFormat === 'letter' ? '✓' : ''}
+                            </button>
+                            <button 
+                              onClick={() => { setPdfFormat('legal'); exportToPDF(); setShowExportMenu(false); setShowFormatMenu(false); }} 
+                              className="format-option"
+                              style={{ fontWeight: pdfFormat === 'legal' ? 'bold' : 'normal' }}
+                            >
+                              Legal (PH) {pdfFormat === 'legal' ? '✓' : ''}
+                            </button>
+                            <button 
+                              onClick={() => { setPdfFormat('a3'); exportToPDF(); setShowExportMenu(false); setShowFormatMenu(false); }} 
+                              className="format-option"
+                              style={{ fontWeight: pdfFormat === 'a3' ? 'bold' : 'normal' }}
+                            >
+                              A3 {pdfFormat === 'a3' ? '✓' : ''}
+                            </button>
+                            <button 
+                              onClick={() => { setPdfFormat('a5'); exportToPDF(); setShowExportMenu(false); setShowFormatMenu(false); }} 
+                              className="format-option"
+                              style={{ fontWeight: pdfFormat === 'a5' ? 'bold' : 'normal' }}
+                            >
+                              A5 {pdfFormat === 'a5' ? '✓' : ''}
+                            </button>
+                            <button 
+                              onClick={() => { setPdfFormat('tabloid'); exportToPDF(); setShowExportMenu(false); setShowFormatMenu(false); }} 
+                              className="format-option"
+                              style={{ fontWeight: pdfFormat === 'tabloid' ? 'bold' : 'normal' }}
+                            >
+                              Tabloid {pdfFormat === 'tabloid' ? '✓' : ''}
+                            </button>
+                    </div>
+                  )}
+                      </div>
                     </div>
                   )}
                 </div>

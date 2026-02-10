@@ -1,3 +1,18 @@
+table {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+tr {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+td, th {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
 .dashboard-container {
   min-height: 100vh;
   background: #e8e8e8;
@@ -179,6 +194,44 @@
   font-size: 13px;
 }
 
+.pdf-format-submenu {
+  background: #f5f5f5;
+  border-top: 1px solid #e0e0e0;
+  padding: 8px 0;
+}
+
+.pdf-format-label {
+  padding: 8px 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.format-option {
+  display: block;
+  width: 100%;
+  padding: 10px 40px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+.format-option:hover {
+  background: #e8f5e9;
+  padding-left: 44px;
+}
+
+.format-option:active {
+  background: #c8e6c9;
+}
+
 .dashboard-main {
   flex: 1;
   padding: 32px;
@@ -271,10 +324,7 @@
   }
 }
 
-/* Also hide when html2pdf is processing */
-.pdf-content-wrapper .no-export {
-  /* Will be hidden by html2pdf's processing */
-}
+/* Also hide when html2pdf is processing - handled by JavaScript */
 
 /* Hide button group on mobile - buttons are in hamburger menu */
 @media (max-width: 480px) {
@@ -577,6 +627,7 @@
 .dashboard-table tbody tr {
   background: transparent;
   transition: background-color 0.2s ease;
+  page-break-inside: avoid;
 }
 
 .dashboard-table tbody tr:nth-child(even) {
@@ -585,6 +636,19 @@
 
 .dashboard-table tbody tr:hover {
   background: transparent;
+}
+
+/* Prevent table from breaking across pages in PDF export */
+.pdf-content-wrapper .dashboard-table {
+  page-break-inside: avoid;
+}
+
+.pdf-content-wrapper .dashboard-table thead {
+  page-break-inside: avoid;
+}
+
+.pdf-content-wrapper .dashboard-table tbody {
+  page-break-inside: avoid;
 }
 
 .table-actions {
