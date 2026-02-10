@@ -181,6 +181,113 @@ html, body, #root {
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
+.scanner-user-menu {
+  margin-left: auto;
+  position: relative;
+}
+
+.scanner-menu-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.scanner-user-dropdown {
+  position: absolute;
+  right: 0;
+  top: 48px;
+  min-width: 220px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(15, 23, 42, 0.96);
+  padding: 10px;
+  z-index: 50;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.scanner-user-name {
+  font-size: 13px;
+  color: #e2e8f0;
+  margin-bottom: 8px;
+  word-break: break-word;
+}
+
+.scanner-quit-btn {
+  width: 100%;
+  border: 1px solid rgba(218, 61, 32, 0.4);
+  background: rgba(218, 61, 32, 0.15);
+  color: #fff;
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.scanner-name-gate {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(135deg, #0f172a 0%, #111827 100%);
+}
+
+.scanner-name-card {
+  width: 100%;
+  max-width: 460px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #0f172a;
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.3);
+}
+
+.scanner-name-card h2 {
+  margin: 0 0 8px 0;
+  font-size: 24px;
+  color: #111827;
+}
+
+.scanner-name-card p {
+  margin: 0 0 18px 0;
+  font-size: 14px;
+  color: #475569;
+}
+
+.scanner-name-input {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 15px;
+  color: #111827;
+  box-sizing: border-box;
+  margin-bottom: 14px;
+}
+
+.scanner-name-input:focus {
+  outline: none;
+  border-color: #3D45AA;
+  box-shadow: 0 0 0 3px rgba(61, 69, 170, 0.1);
+}
+
+.scanner-name-btn {
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #3D45AA 0%, #2d3480 100%);
+  color: #fff;
+  padding: 12px 14px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -873,6 +980,80 @@ html, body, #root {
   color: #0f172a;
   word-break: break-word;
   letter-spacing: -0.1px;
+}
+
+/* Keep editable fields visually aligned with the original static value text */
+.data-item input.value {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  line-height: 1.35;
+  font: inherit;
+  color: #0f172a !important;
+  border-radius: 0;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -webkit-text-fill-color: #0f172a;
+}
+
+.data-item input.value::placeholder {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.data-item input.value:focus {
+  color: #0f172a;
+}
+
+.data-item textarea.value {
+  width: 100%;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  line-height: 1.35;
+  font: inherit;
+  color: #0f172a !important;
+  border-radius: 0;
+  box-shadow: none;
+  resize: none;
+  overflow: hidden;
+  height: auto;
+  min-height: 20px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  -webkit-text-fill-color: #0f172a;
+}
+
+.data-item textarea.value::placeholder {
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.data-item textarea.value:focus {
+  color: #0f172a;
+}
+
+.data-item input[type="date"].value {
+  min-height: 20px;
+}
+
+.data-item input[type="date"].value::-webkit-calendar-picker-indicator {
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.data-item input.value:-webkit-autofill,
+.data-item input.value:-webkit-autofill:hover,
+.data-item input.value:-webkit-autofill:focus {
+  -webkit-text-fill-color: #0f172a !important;
+  transition: background-color 9999s ease-out 0s;
 }
 
 .error-message {
