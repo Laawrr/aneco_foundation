@@ -83,9 +83,10 @@ const parseOCRText = (text) => {
     data.transactionRef = cleanedRef;
   }
 
-  // 2. Account Number & Customer Name (Updated to allow hyphens in names)
-  // Added \- inside the character class for name
-  const accountMatch = text.match(/(B\s*\d[\d\s]*)\s*\/\s*([A-Z,\s\-]+?)(?:\n|$)/i);
+  // 2. Account Number & Customer Name (Updated to allow hyphens and slashes in names)
+  // Added \/ inside the character class for name: [A-Z,\s\-\/]
+  const accountMatch = text.match(/(B\s*\d[\d\s]*)\s*\/\s*([A-Z,\s\-\/]+?)(?:\n|$)/i);
+  
   if (accountMatch) {
      const rawAcc = accountMatch[1].replace(/\s/g, '');
      data.accountNumber = 'B' + cleanOCRNumber(rawAcc.substring(1)); 
