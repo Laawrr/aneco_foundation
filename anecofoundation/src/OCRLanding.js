@@ -24,6 +24,24 @@ const formatDateForInput = (dateString) => {
   return date.toISOString().split('T')[0];
 };
 
+const isFebruary2026 = (dateString) => {
+  if (!dateString) return false;
+
+  // Prefer strict yyyy-mm-dd parsing for consistency with input[type="date"].
+  const isoMatch = String(dateString).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const year = Number(isoMatch[1]);
+    const month = Number(isoMatch[2]);
+    const day = Number(isoMatch[3]);
+    if (year !== 2026 || month !== 2) return false;
+    return day >= 1 && day <= 29;
+  }
+
+  const parsed = new Date(dateString);
+  if (isNaN(parsed.getTime())) return false;
+  return parsed.getFullYear() === 2026 && parsed.getMonth() === 1;
+};
+
 // HELPER: Pre-process image (Grayscale + High Contrast) to help Tesseract
 const preprocessImage = (originalCanvas) => {
   const width = originalCanvas.width;
@@ -508,6 +526,11 @@ function OCRLanding() {
 
     if (countDigits(editableVerifiedData.transactionRef) < 15) {
       showToast('❌ Transaction reference must have at least 15 digits');
+      return;
+    }
+
+    if (!isFebruary2026(editableVerifiedData.date)) {
+      showToast('❌ Only dates within February 2026 are allowed');
       return;
     }
 
