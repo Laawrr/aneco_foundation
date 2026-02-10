@@ -48,6 +48,23 @@ let worker;
 
 const { testConnection, getConnection, pool } = require('./db');
 
+function isFebruary2026(dateValue) {
+  if (!dateValue) return false;
+  const raw = String(dateValue).trim();
+
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const year = Number(iso[1]);
+    const month = Number(iso[2]);
+    const day = Number(iso[3]);
+    return year === 2026 && month === 2 && day >= 1 && day <= 29;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return false;
+  return parsed.getFullYear() === 2026 && parsed.getMonth() === 1;
+}
+
 async function ensureOcrTable(conn) {
   await conn.query(`
     CREATE TABLE IF NOT EXISTS ocr_data (
@@ -148,6 +165,14 @@ app.get('/api/check-transaction/:transactionRef', async (req, res) => {
 app.post('/api/ocr-data', async (req, res) => {
   const { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company } = req.body;
   console.log('[api] save-ocr-data requested', { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company });
+
+  if (!isFebruary2026(date)) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Only dates within February 2026 are allowed',
+    });
+  }
+
   let conn;
   try {
     conn = await getConnection();
