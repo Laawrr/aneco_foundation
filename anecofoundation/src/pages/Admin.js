@@ -9,15 +9,18 @@ export default function Admin() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // Clear any stale authentication data on component mount for security
-  // This ensures users must re-authenticate when accessing the login page
+  // Redirect authenticated users away from login page
   useEffect(() => {
-    // Clear localStorage to ensure clean state and prevent stale sessions
+    const authed = localStorage.getItem('adminAuthed') === 'true';
+    if (authed) {
+      // User is already authenticated, redirect to dashboard
+      navigate('/dashboard', { replace: true });
+      return;
+    }
+    // Only clear authentication if user is not authenticated
+    // This allows users to access the login page when not logged in
     localStorage.removeItem('adminAuthed');
-    
-    // Clear any cached data that might be sensitive
-    // This ensures no residual auth data from previous sessions
-  }, []);
+  }, [navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
