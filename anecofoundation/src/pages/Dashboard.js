@@ -1,50 +1,70 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../config';
 import './Dashboard.css';
 
 export default function Dashboard() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [showMobileExportSubmenu, setShowMobileExportSubmenu] = useState(false);
   // Table rows are fully dynamic; start empty and fill from the API.
   // Each row may have an 'id' when it exists in the database.
   const [tableData, setTableData] = useState([]);
   // Track ids that should be deleted when saving.
   const [deletedIds, setDeletedIds] = useState([]);
+  // Track authentication status to prevent flash of content
+  const [isAuthenticated, setIsAuthenticated] = useState(null);
+  // Search/filter query
+  const [searchQuery, setSearchQuery] = useState('');
   const navigate = useNavigate();
   const tableRef = useRef(null);
   const exportMenuRef = useRef(null);
+  const mobileMenuRef = useRef(null);
   const pdfRef = useRef(null);
 
-  // Redirect to login if not authenticated
+  // Check authentication immediately and redirect if not authenticated
   useEffect(() => {
     const authed = localStorage.getItem('adminAuthed') === 'true';
     if (!authed) {
       localStorage.removeItem('adminAuthed');
-      navigate('/login');
+      navigate('/login', { replace: true });
+      return;
     }
+    setIsAuthenticated(true);
   }, [navigate]);
 
-  // Close export menu when clicking outside
+  // Close export menu and mobile menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
         setShowExportMenu(false);
       }
+      if (mobileMenuRef.current && !mobileMenuRef.current.contains(event.target)) {
+        setShowMobileMenu(false);
+      }
     };
 
-    if (showExportMenu) {
+    if (showExportMenu || showMobileMenu) {
       document.addEventListener('mousedown', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [showExportMenu]);
+  }, [showExportMenu, showMobileMenu]);
+
+  // Auto-close export submenu when mobile menu closes
+  useEffect(() => {
+    if (!showMobileMenu) {
+      setShowMobileExportSubmenu(false);
+    }
+  }, [showMobileMenu]);
 
   // Fetch data for the dashboard table
   const fetchDashboardData = async () => {
     try {
-      const res = await fetch('http://localhost:3001/api/ocr-data?limit=100');
+      const res = await fetch(`${API_BASE_URL}/api/ocr-data?limit=100`);
       const json = await res.json();
 
       if (!json || json.ok === false || !Array.isArray(json.data)) {
@@ -74,6 +94,9 @@ export default function Dashboard() {
   };
 
   useEffect(() => {
+    // Only fetch data if authenticated
+    if (!isAuthenticated) return;
+
     // Initial load
     fetchDashboardData();
 
@@ -86,12 +109,30 @@ export default function Dashboard() {
     }, 5000); // 5 seconds
 
     return () => clearInterval(intervalId);
-  }, [isEditMode]);
+  }, [isEditMode, isAuthenticated]);
 
-  const handleCellChange = (rowIndex, columnKey, value) => {
-    const newData = [...tableData];
-    newData[rowIndex][columnKey] = value;
-    setTableData(newData);
+  const handleCellChange = (rowToUpdate, columnKey, value) => {
+    setTableData((prev) => {
+      const newData = [...prev];
+      // Find the original index of the row
+      const originalIndex = newData.findIndex((row) => {
+        // Match by id if available, otherwise match by all fields
+        if (rowToUpdate.id && row.id) {
+          return row.id === rowToUpdate.id;
+        }
+        return (
+          row.accountNumber === rowToUpdate.accountNumber &&
+          row.accountName === rowToUpdate.accountName &&
+          row.referenceNo === rowToUpdate.referenceNo &&
+          row.amount === rowToUpdate.amount
+        );
+      });
+      
+      if (originalIndex !== -1) {
+        newData[originalIndex][columnKey] = value;
+      }
+      return newData;
+    });
   };
 
   const handleSave = async () => {
@@ -99,7 +140,7 @@ export default function Dashboard() {
       // Delete rows that were removed in the UI
       await Promise.all(
         deletedIds.map((id) =>
-          fetch(`http://localhost:3001/api/ocr-data/${id}`, {
+          fetch(`${API_BASE_URL}/api/ocr-data/${id}`, {
             method: 'DELETE',
           })
         )
@@ -117,7 +158,7 @@ export default function Dashboard() {
       // Create new rows
       await Promise.all(
         rowsToCreate.map((row) =>
-          fetch('http://localhost:3001/api/ocr-data', {
+          fetch(`${API_BASE_URL}/api/ocr-data`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -137,7 +178,7 @@ export default function Dashboard() {
       // Update existing rows
       await Promise.all(
         rowsToUpdate.map((row) =>
-          fetch(`http://localhost:3001/api/ocr-data/${row.id}`, {
+          fetch(`${API_BASE_URL}/api/ocr-data/${row.id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -175,15 +216,49 @@ export default function Dashboard() {
     ]);
   };
 
-  const deleteRow = (rowIndex) => {
+  const deleteRow = (rowToDelete) => {
     setTableData((prev) => {
-      const row = prev[rowIndex];
+      // Find the original index of the row
+      const originalIndex = prev.findIndex((row) => {
+        // Match by id if available, otherwise match by all fields
+        if (rowToDelete.id && row.id) {
+          return row.id === rowToDelete.id;
+        }
+        return (
+          row.accountNumber === rowToDelete.accountNumber &&
+          row.accountName === rowToDelete.accountName &&
+          row.referenceNo === rowToDelete.referenceNo &&
+          row.amount === rowToDelete.amount
+        );
+      });
+      
+      if (originalIndex === -1) return prev;
+      
+      const row = prev[originalIndex];
       if (row && row.id) {
         setDeletedIds((ids) => [...ids, row.id]);
       }
-      return prev.filter((_, index) => index !== rowIndex);
+      return prev.filter((_, index) => index !== originalIndex);
     });
   };
+
+  // Filter table data based on search query
+  const filteredTableData = tableData.filter((row) => {
+    if (!searchQuery.trim()) return true;
+    
+    const query = searchQuery.toLowerCase().trim();
+    const accountNumber = (row.accountNumber || '').toLowerCase();
+    const accountName = (row.accountName || '').toLowerCase();
+    const referenceNo = (row.referenceNo || '').toLowerCase();
+    const amount = (row.amount || '').toLowerCase();
+    
+    return (
+      accountNumber.includes(query) ||
+      accountName.includes(query) ||
+      referenceNo.includes(query) ||
+      amount.includes(query)
+    );
+  });
 
   const exportToExcel = () => {
     try {
@@ -204,6 +279,12 @@ export default function Dashboard() {
 
       if (!content) return;
 
+      // Hide search container before export
+      const searchContainer = content.querySelector('.no-export');
+      if (searchContainer) {
+        searchContainer.style.display = 'none';
+      }
+
       const options = {
         margin: [15, 15, 15, 15],
         filename: 'dashboard_export.pdf',
@@ -212,25 +293,138 @@ export default function Dashboard() {
         jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' },
       };
 
-      html2pdf().set(options).from(content).save();
+      html2pdf().set(options).from(content).save().then(() => {
+        // Restore search container visibility after export
+        if (searchContainer) {
+          searchContainer.style.display = 'block';
+        }
+      });
       setShowExportMenu(false);
     } catch (error) {
       alert('Please install html2pdf package: npm install html2pdf.js');
     }
   };
 
+  // Don't render anything until authentication is verified
+  // This prevents flash of content before redirect
+  if (isAuthenticated === null) {
+    return null;
+  }
+
+  // If not authenticated, return null (redirect will happen)
+  if (!isAuthenticated) {
+    return null;
+  }
+
   return (
     <div className="dashboard-container">
       <header className="dashboard-header">
+        {/* Desktop Logout Button */}
         <Link
           to="/login"
-          className="logout-btn"
+          className="logout-btn desktop-logout"
           onClick={() => {
             localStorage.removeItem('adminAuthed');
           }}
         >
           Logout
         </Link>
+
+        {/* Mobile Hamburger Menu */}
+        <div className="mobile-menu-container" ref={mobileMenuRef}>
+          <button
+            className="mobile-menu-btn"
+            onClick={() => setShowMobileMenu(!showMobileMenu)}
+            aria-label="Menu"
+          >
+            <span className="burger-line"></span>
+            <span className="burger-line"></span>
+            <span className="burger-line"></span>
+          </button>
+          {showMobileMenu && (
+            <div className="mobile-menu-dropdown">
+              {!isEditMode ? (
+                <>
+                  <button
+                    className="mobile-menu-item mobile-menu-button"
+                    onClick={() => {
+                      setIsEditMode(true);
+                      setShowMobileMenu(false);
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <div className="mobile-menu-divider"></div>
+                  <button
+                    className="mobile-menu-item mobile-menu-button"
+                    onClick={() => {
+                      setShowMobileExportSubmenu(!showMobileExportSubmenu);
+                    }}
+                  >
+                    Export {showMobileExportSubmenu ? '▼' : '▶'}
+                  </button>
+                  {showMobileExportSubmenu && (
+                    <div className="mobile-export-submenu">
+                      <button
+                        className="mobile-menu-item mobile-menu-button"
+                        onClick={() => {
+                          exportToExcel();
+                          setShowMobileExportSubmenu(false);
+                          setShowMobileMenu(false);
+                        }}
+                      >
+                        📊 Export as Excel
+                      </button>
+                      <button
+                        className="mobile-menu-item mobile-menu-button"
+                        onClick={() => {
+                          exportToPDF();
+                          setShowMobileExportSubmenu(false);
+                          setShowMobileMenu(false);
+                        }}
+                      >
+                        📄 Export as PDF
+                      </button>
+                    </div>
+                  )}
+                  <div className="mobile-menu-divider"></div>
+                </>
+              ) : (
+                <>
+                  <button
+                    className="mobile-menu-item mobile-menu-button mobile-menu-save"
+                    onClick={() => {
+                      handleSave();
+                      setShowMobileMenu(false);
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button
+                    className="mobile-menu-item mobile-menu-button mobile-menu-cancel"
+                    onClick={() => {
+                      handleCancel();
+                      setShowMobileMenu(false);
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <div className="mobile-menu-divider"></div>
+                </>
+              )}
+              <Link
+                to="/login"
+                className="mobile-menu-item mobile-menu-logout"
+                onClick={() => {
+                  localStorage.removeItem('adminAuthed');
+                  setShowMobileMenu(false);
+                }}
+              >
+                Logout
+              </Link>
+            </div>
+          )}
+        </div>
       </header>
     
       <main className="dashboard-main">
@@ -290,86 +484,205 @@ export default function Dashboard() {
               </div>
             </div>
 
-            <table className="dashboard-table" ref={tableRef}>
-              <thead>
-                <tr>
-                  <th>NO.</th>
-                  <th>ACCOUNT NUMBER</th>
-                  <th>ACCOUNT NAME</th>
-                  <th>REFERENCE NO.</th>
-                  <th>AMOUNT</th>
-                  {isEditMode && <th style={{ width: '60px' }}></th>}
-                </tr>
-              </thead>
-              <tbody>
-                {tableData.map((row, index) => (
-                  <tr key={index}>
-                    <td>
-                      {index + 1}
-                    </td>
-                    <td>
+            {/* Search Container - Above table, hidden in PDF export */}
+            <div className="search-container no-export">
+              <input
+                type="text"
+                className="search-input"
+                placeholder="Search by account number, name, reference, or amount..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  className="search-clear-btn"
+                  onClick={() => setSearchQuery('')}
+                  aria-label="Clear search"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="table-wrapper">
+              <table className="dashboard-table desktop-table" ref={tableRef}>
+                <thead>
+                  <tr>
+                    <th>NO.</th>
+                    <th>ACCOUNT NUMBER</th>
+                    <th>ACCOUNT NAME</th>
+                    <th>REFERENCE NO.</th>
+                    <th>AMOUNT</th>
+                    {isEditMode && <th style={{ width: '60px' }}></th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredTableData.length === 0 ? (
+                    <tr>
+                      <td colSpan={isEditMode ? 6 : 5} style={{ textAlign: 'center', padding: '20px' }}>
+                        {searchQuery ? 'No results found' : 'No data available'}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredTableData.map((row, index) => (
+                      <tr key={index}>
+                        <td>
+                          {index + 1}
+                        </td>
+                      <td>
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={row.accountNumber}
+                            onChange={(e) => handleCellChange(row, 'accountNumber', e.target.value)}
+                            className="cell-input"
+                          />
+                        ) : (
+                          row.accountNumber
+                        )}
+                      </td>
+                      <td>
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={row.accountName}
+                            onChange={(e) => handleCellChange(row, 'accountName', e.target.value)}
+                            className="cell-input"
+                          />
+                        ) : (
+                          row.accountName
+                        )}
+                      </td>
+                      <td>
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={row.referenceNo}
+                            onChange={(e) => handleCellChange(row, 'referenceNo', e.target.value)}
+                            className="cell-input"
+                          />
+                        ) : (
+                          row.referenceNo
+                        )}
+                      </td>
+                      <td>
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={row.amount}
+                            onChange={(e) => handleCellChange(row, 'amount', e.target.value)}
+                            className="cell-input"
+                          />
+                        ) : (
+                          row.amount
+                        )}
+                      </td>
+                      {isEditMode && (
+                        <td>
+                          <button
+                            type="button"
+                            className="row-delete-btn"
+                            onClick={() => deleteRow(row)}
+                          >
+                            ✕
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Card View */}
+            <div className="mobile-cards">
+              {filteredTableData.length === 0 ? (
+                <div className="mobile-card">
+                  <div className="mobile-card-body" style={{ textAlign: 'center', padding: '40px 20px' }}>
+                    <div className="mobile-field-value">
+                      {searchQuery ? 'No results found' : 'No data available'}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                filteredTableData.map((row, index) => (
+                <div key={index} className="mobile-card">
+                  <div className="mobile-card-header">
+                    <span className="mobile-card-number">#{index + 1}</span>
+                    {isEditMode && (
+                      <button
+                        type="button"
+                        className="mobile-delete-btn"
+                        onClick={() => deleteRow(row)}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  <div className="mobile-card-body">
+                    <div className="mobile-field">
+                      <label>ACCOUNT NUMBER</label>
                       {isEditMode ? (
                         <input
                           type="text"
                           value={row.accountNumber}
-                          onChange={(e) => handleCellChange(index, 'accountNumber', e.target.value)}
-                          className="cell-input"
+                          onChange={(e) => handleCellChange(row, 'accountNumber', e.target.value)}
+                          className="mobile-cell-input"
+                          placeholder="Enter account number"
                         />
                       ) : (
-                        row.accountNumber
+                        <div className="mobile-field-value">{row.accountNumber || '-'}</div>
                       )}
-                    </td>
-                    <td>
+                    </div>
+                    <div className="mobile-field">
+                      <label>ACCOUNT NAME</label>
                       {isEditMode ? (
                         <input
                           type="text"
                           value={row.accountName}
-                          onChange={(e) => handleCellChange(index, 'accountName', e.target.value)}
-                          className="cell-input"
+                          onChange={(e) => handleCellChange(row, 'accountName', e.target.value)}
+                          className="mobile-cell-input"
+                          placeholder="Enter account name"
                         />
                       ) : (
-                        row.accountName
+                        <div className="mobile-field-value">{row.accountName || '-'}</div>
                       )}
-                    </td>
-                    <td>
+                    </div>
+                    <div className="mobile-field">
+                      <label>REFERENCE NO.</label>
                       {isEditMode ? (
                         <input
                           type="text"
                           value={row.referenceNo}
-                          onChange={(e) => handleCellChange(index, 'referenceNo', e.target.value)}
-                          className="cell-input"
+                          onChange={(e) => handleCellChange(row, 'referenceNo', e.target.value)}
+                          className="mobile-cell-input"
+                          placeholder="Enter reference number"
                         />
                       ) : (
-                        row.referenceNo
+                        <div className="mobile-field-value">{row.referenceNo || '-'}</div>
                       )}
-                    </td>
-                    <td>
+                    </div>
+                    <div className="mobile-field">
+                      <label>AMOUNT</label>
                       {isEditMode ? (
                         <input
                           type="text"
                           value={row.amount}
-                          onChange={(e) => handleCellChange(index, 'amount', e.target.value)}
-                          className="cell-input"
+                          onChange={(e) => handleCellChange(row, 'amount', e.target.value)}
+                          className="mobile-cell-input"
+                          placeholder="Enter amount"
                         />
                       ) : (
-                        row.amount
+                        <div className="mobile-field-value">{row.amount || '-'}</div>
                       )}
-                    </td>
-                    {isEditMode && (
-                      <td>
-                        <button
-                          type="button"
-                          className="row-delete-btn"
-                          onClick={() => deleteRow(index)}
-                        >
-                          ✕
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                    </div>
+                  </div>
+                </div>
+                ))
+              )}
+            </div>
 
             {isEditMode && (
               <div className="table-actions">

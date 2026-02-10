@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { API_BASE_URL } from '../config';
 import './Admin.css';
 
 export default function Admin() {
@@ -8,13 +9,15 @@ export default function Admin() {
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
-  // If already authenticated, go straight to dashboard
+  // Clear any stale authentication data on component mount for security
+  // This ensures users must re-authenticate when accessing the login page
   useEffect(() => {
-    const authed = localStorage.getItem('adminAuthed') === 'true';
-    if (authed) {
-      navigate('/dashboard');
-    }
-  }, [navigate]);
+    // Clear localStorage to ensure clean state and prevent stale sessions
+    localStorage.removeItem('adminAuthed');
+    
+    // Clear any cached data that might be sensitive
+    // This ensures no residual auth data from previous sessions
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -28,7 +31,7 @@ export default function Admin() {
       setLoading(true);
       setError('');
 
-      const res = await fetch('http://localhost:3001/api/login', {
+      const res = await fetch(`${API_BASE_URL}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code: code.trim() }),
@@ -39,6 +42,8 @@ export default function Admin() {
       if (!res.ok || !data.ok) {
         setError(data.error || 'Invalid code');
         setCode('');
+        // Clear any auth data on failed login attempt for security
+        localStorage.removeItem('adminAuthed');
         return;
       }
 
@@ -48,6 +53,8 @@ export default function Admin() {
     } catch (err) {
       console.error('Login error:', err);
       setError('Unable to login. Please try again.');
+      // Clear any auth data on network/connection error for security
+      localStorage.removeItem('adminAuthed');
     } finally {
       setLoading(false);
     }
@@ -57,7 +64,16 @@ export default function Admin() {
     <div className="admin-container">
       <div className="login-card">
         <div className="logo-wrap">
-          <img src="/aneco2.png" alt="ANECO logo" className="login-logo" />
+          <img 
+            src="/aneco2.png" 
+            alt="ANECO logo" 
+            className="login-logo"
+            loading="eager"
+            onLoad={(e) => {
+              // Ensure image maintains aspect ratio after load
+              e.target.style.width = 'auto';
+            }}
+          />
         </div>
         <h3>Enter code to login</h3>
 
@@ -65,7 +81,7 @@ export default function Admin() {
           <label htmlFor="admin-code">Code</label>
           <input
             id="admin-code"
-            type="password"
+            type="text"
             value={code}
             onChange={(e) => setCode(e.target.value)}
             placeholder="Enter your access code"
