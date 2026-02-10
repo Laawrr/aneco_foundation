@@ -1,24 +1,28 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import './Dashboard.css';
 
 export default function Dashboard() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
-  const [tableData, setTableData] = useState(
-    Array(7)
-      .fill(null)
-      .map(() => ({
-        no: '',
-        accountNumber: '',
-        accountName: '',
-        referenceNo: '',
-        amount: '',
-      }))
-  );
+  // Table rows are fully dynamic; start empty and fill from the API.
+  // Each row may have an 'id' when it exists in the database.
+  const [tableData, setTableData] = useState([]);
+  // Track ids that should be deleted when saving.
+  const [deletedIds, setDeletedIds] = useState([]);
+  const navigate = useNavigate();
   const tableRef = useRef(null);
   const exportMenuRef = useRef(null);
   const pdfRef = useRef(null);
+
+  // Redirect to login if not authenticated
+  useEffect(() => {
+    const authed = localStorage.getItem('adminAuthed') === 'true';
+    if (!authed) {
+      localStorage.removeItem('adminAuthed');
+      navigate('/login');
+    }
+  }, [navigate]);
 
   // Close export menu when clicking outside
   useEffect(() => {
@@ -37,30 +41,148 @@ export default function Dashboard() {
     };
   }, [showExportMenu]);
 
+  // Fetch data for the dashboard table
+  const fetchDashboardData = async () => {
+    try {
+      const res = await fetch('http://localhost:3001/api/ocr-data?limit=100');
+      const json = await res.json();
+
+      if (!json || json.ok === false || !Array.isArray(json.data)) {
+        console.warn('Unexpected /api/ocr-data response shape', json);
+        return;
+      }
+
+      const rows = json.data;
+
+      const mapped = rows.map((row) => ({
+        id: row.id,
+        accountNumber: row.accountNumber || '',
+        accountName: row.customerName || '',
+        referenceNo: row.transactionRef || '',
+        // Show electricity_bill in the AMOUNT column
+        amount:
+          row.electricityBill !== null && row.electricityBill !== undefined
+            ? String(row.electricityBill)
+            : '',
+      }));
+
+      setTableData(mapped);
+      setDeletedIds([]);
+    } catch (err) {
+      console.error('Failed to fetch dashboard data:', err);
+    }
+  };
+
+  useEffect(() => {
+    // Initial load
+    fetchDashboardData();
+
+    // Poll in the background to keep table up to date
+    const intervalId = setInterval(() => {
+      // Don't override user edits while in edit mode
+      if (!isEditMode) {
+        fetchDashboardData();
+      }
+    }, 5000); // 5 seconds
+
+    return () => clearInterval(intervalId);
+  }, [isEditMode]);
+
   const handleCellChange = (rowIndex, columnKey, value) => {
     const newData = [...tableData];
     newData[rowIndex][columnKey] = value;
     setTableData(newData);
   };
 
-  const handleSave = () => {
-    setIsEditMode(false);
+  const handleSave = async () => {
+    try {
+      // Delete rows that were removed in the UI
+      await Promise.all(
+        deletedIds.map((id) =>
+          fetch(`http://localhost:3001/api/ocr-data/${id}`, {
+            method: 'DELETE',
+          })
+        )
+      );
+
+      // Separate rows that need to be created vs updated
+      const rowsToCreate = tableData.filter(
+        (row) =>
+          !row.id &&
+          (row.accountNumber || row.accountName || row.referenceNo || row.amount)
+      );
+
+      const rowsToUpdate = tableData.filter((row) => row.id);
+
+      // Create new rows
+      await Promise.all(
+        rowsToCreate.map((row) =>
+          fetch('http://localhost:3001/api/ocr-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              transactionRef: row.referenceNo || null,
+              accountNumber: row.accountNumber || null,
+              customerName: row.accountName || null,
+              company: null,
+              date: null,
+              electricityBill: row.amount || null,
+              amountDue: null,
+              totalSales: null,
+            }),
+          })
+        )
+      );
+
+      // Update existing rows
+      await Promise.all(
+        rowsToUpdate.map((row) =>
+          fetch(`http://localhost:3001/api/ocr-data/${row.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              transactionRef: row.referenceNo || null,
+              accountNumber: row.accountNumber || null,
+              customerName: row.accountName || null,
+              company: null,
+              date: null,
+              electricityBill: row.amount || null,
+              amountDue: null,
+              totalSales: null,
+            }),
+          })
+        )
+      );
+
+      // Refresh data from server so ids/ordering are correct
+      await fetchDashboardData();
+      setIsEditMode(false);
+    } catch (err) {
+      console.error('Failed to save dashboard changes:', err);
+      // Stay in edit mode if save failed
+    }
   };
 
   const handleCancel = () => {
+    // Just leave the current data as-is and exit edit mode
     setIsEditMode(false);
-    setTableData(Array(7).fill(null).map(() => ({ no: '', accountNumber: '', accountName: '', referenceNo: '', amount: '' })));
   };
 
   const addRow = () => {
     setTableData((prev) => [
       ...prev,
-      { no: '', accountNumber: '', accountName: '', referenceNo: '', amount: '' },
+      { id: null, accountNumber: '', accountName: '', referenceNo: '', amount: '' },
     ]);
   };
 
   const deleteRow = (rowIndex) => {
-    setTableData((prev) => prev.filter((_, index) => index !== rowIndex));
+    setTableData((prev) => {
+      const row = prev[rowIndex];
+      if (row && row.id) {
+        setDeletedIds((ids) => [...ids, row.id]);
+      }
+      return prev.filter((_, index) => index !== rowIndex);
+    });
   };
 
   const exportToExcel = () => {
@@ -100,7 +222,15 @@ export default function Dashboard() {
   return (
     <div className="dashboard-container">
       <header className="dashboard-header">
-        <Link to="/login" className="logout-btn">Logout</Link>
+        <Link
+          to="/login"
+          className="logout-btn"
+          onClick={() => {
+            localStorage.removeItem('adminAuthed');
+          }}
+        >
+          Logout
+        </Link>
       </header>
     
       <main className="dashboard-main">
@@ -175,16 +305,7 @@ export default function Dashboard() {
                 {tableData.map((row, index) => (
                   <tr key={index}>
                     <td>
-                      {isEditMode ? (
-                        <input
-                          type="text"
-                          value={row.no}
-                          onChange={(e) => handleCellChange(index, 'no', e.target.value)}
-                          className="cell-input"
-                        />
-                      ) : (
-                        row.no
-                      )}
+                      {index + 1}
                     </td>
                     <td>
                       {isEditMode ? (
