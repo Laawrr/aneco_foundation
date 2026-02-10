@@ -3,79 +3,127 @@ import './OCRLanding.css';
 import { createWorker } from 'tesseract.js';
 import ImageCropper from './components/ImageCropper';
 
+// HELPER: Convert "O" to "0", "l" to "1", etc. for numeric fields
+const cleanOCRNumber = (str) => {
+  if (!str) return '';
+  return str.replace(/O|o|D|Q/g, '0')
+            .replace(/I|l|\||\]/g, '1')
+            .replace(/Z/g, '2')
+            .replace(/S/g, '5')
+            .replace(/B/g, '8')
+            .replace(/[^\d.]/g, ''); // Strip everything that isn't a digit or dot
+};
+
+// HELPER: Convert OCR date string to YYYY-MM-DD for HTML input
+const formatDateForInput = (dateString) => {
+  if (!dateString) return '';
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) return ''; // Invalid date
+  return date.toISOString().split('T')[0];
+};
+
+// HELPER: Pre-process image (Grayscale + High Contrast) to help Tesseract
+const preprocessImage = (originalCanvas) => {
+  const width = originalCanvas.width;
+  const height = originalCanvas.height;
+  const processedCanvas = document.createElement('canvas');
+  processedCanvas.width = width;
+  processedCanvas.height = height;
+  const ctx = processedCanvas.getContext('2d');
+  
+  // Draw original
+  ctx.drawImage(originalCanvas, 0, 0);
+  
+  // Get pixel data
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const data = imageData.data;
+
+  // Contrast factor (increase to boost text darkness)
+  const contrast = 60; // range 0-255
+  const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+
+  for (let i = 0; i < data.length; i += 4) {
+    // Convert to Grayscale (Luma formula)
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+
+    // Apply Contrast
+    let newValue = factor * (gray - 128) + 128;
+
+    // Clamp to 0-255
+    newValue = Math.max(0, Math.min(255, newValue));
+
+    data[i] = newValue;     // R
+    data[i + 1] = newValue; // G
+    data[i + 2] = newValue; // B
+  }
+
+  ctx.putImageData(imageData, 0, 0);
+  return processedCanvas;
+};
+
 // Parser function to extract structured data from OCR text
 const parseOCRText = (text) => {
   const data = {};
+  console.log("Raw OCR Text:", text);
 
-  // Transaction Reference
-  const transactionMatch = text.match(/Transaction\s*Ref\s*[:-]?\s*(\d+)/i);
-  if (transactionMatch) {
-    data.transactionRef = transactionMatch[1].trim();
+  // 1. Transaction Ref
+  // CHANGED: We now capture specifically digits, but allow common OCR errors (O, I, l) inside the number.
+  // We STOP capturing if we hit a space followed by letters.
+  const transMatch = text.match(/Trans[a-z]*\s*Ref[a-z]*\s*[:\.-]?\s*([0-9OIlZSB]{15,})/i);
+  
+  if (transMatch) {
+    let cleanedRef = cleanOCRNumber(transMatch[1]);
+    
+    // SAFETY: If it's longer than 18 digits, it's almost certainly noise. 
+    // If your refs are ALWAYS exactly 15 digits, change 20 to 15.
+    if (cleanedRef.length > 20) {
+      cleanedRef = cleanedRef.substring(0, 15); 
+    }
+    
+    data.transactionRef = cleanedRef;
   }
 
-  // Account Number and Customer Name
-  const accountMatch = text.match(/(B\d+)\s*\/\s*([A-Z,\s]+?)(?:\n|$)/i);
+  // 2. Account Number & Customer Name (Updated to allow hyphens in names)
+  // Added \- inside the character class for name
+  const accountMatch = text.match(/(B\s*\d[\d\s]*)\s*\/\s*([A-Z,\s\-]+?)(?:\n|$)/i);
   if (accountMatch) {
-    data.accountNumber = accountMatch[1].trim();
-    data.customerName = accountMatch[2].trim();
+     const rawAcc = accountMatch[1].replace(/\s/g, '');
+     data.accountNumber = 'B' + cleanOCRNumber(rawAcc.substring(1)); 
+     data.customerName = accountMatch[2].trim();
   } else {
-    const accountOnly = text.match(/\b(B\d{12,})\b/i);
+    // Fallback
+    const accountOnly = text.match(/\b(B\s*[\d\sOIl]{12,})\b/i);
     if (accountOnly) {
-      data.accountNumber = accountOnly[1].trim();
+       const rawAcc = accountOnly[1].replace(/\s/g, '');
+       data.accountNumber = 'B' + cleanOCRNumber(rawAcc.substring(1));
     }
   }
 
-  // Date (Long format)
+  // 3. Date
   const dateMatch = text.match(
-    /Date\s*[:-]?\s*(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2}),?\s+(\d{4})/i
+    /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i
   );
   if (dateMatch) {
     data.date = `${dateMatch[1]} ${dateMatch[2]}, ${dateMatch[3]}`;
   } else {
-    // Date (MM/DD/YYYY)
-    const dateMatch2 = text.match(/Date\s*[:-]?\s*(\d{1,2}\/\d{1,2}\/\d{4})/);
-    if (dateMatch2) {
-      data.date = dateMatch2[1];
-    }
+    const shortDate = text.match(/(\d{1,2}\/\d{1,2}\/\d{4})/);
+    if (shortDate) data.date = shortDate[1];
   }
 
-  // Electricity Bill
-  const electricityMatch = text.match(
-    /Electricity\s*Bill\s*[:-]?\s*([\d,]+\.?\d*)/i
-  );
-  if (electricityMatch) {
-    data.electricityBill = electricityMatch[1].trim();
+  // 4. Electricity Bill
+  const billMatch = text.match(/(?:Electricity|Current)\s*Bill\s*[:\.-]?\s*([P\p{Sc}]?\s*[\d,]+\.?\d*)/iu);
+  if (billMatch) {
+     data.electricityBill = billMatch[1].replace(/[^\d.]/g, '');
   }
 
-  // Amount Due
-  const totalMatch = text.match(
-    /Amount\s*Due\s*[:-]?\s*([\d,]+\.?\d*)/i
-  );
-  if (totalMatch) {
-    data.amountDue = totalMatch[1].trim();
+  // 5. Amount Due fallback
+  const dueMatch = text.match(/Amount\s*Due\s*[:\.-]?\s*([P\p{Sc}]?\s*[\d,]+\.?\d*)/iu);
+  if (dueMatch) {
+    data.amountDue = dueMatch[1].replace(/[^\d.]/g, '');
   }
 
-  // Total Sales
-  const salesMatch = text.match(
-    /Total\s*Sales\s*[:-]?\s*([\d,]+\.?\d*)/i
-  );
-  if (salesMatch) {
-    data.totalSales = salesMatch[1].trim();
-  }
-
-  // Company Name
-  const companyMatch = text.match(
-    /AGUSAN\s+DEL\s+NORTE\s+ELECTRIC\s+COOPERATIVE,?\s*INC\.?/i
-  );
-  if (companyMatch) {
-    data.company = companyMatch[0].trim();
-  } else {
-    const companyMatch2 = text.match(
-      /([A-Z][A-Z\s&]+ELECTRIC[A-Z\s,]+INC)/i
-    );
-    if (companyMatch2) {
-      data.company = companyMatch2[1].trim();
-    }
+  if (!data.electricityBill && data.amountDue) {
+    data.electricityBill = data.amountDue;
   }
 
   return data;
@@ -115,8 +163,8 @@ function OCRLanding() {
   const [toast, setToast] = useState('');
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState(null);
-  const [rotateView, setRotateView] = useState(0); // degrees to rotate live video for user
-  const [facingMode, setFacingMode] = useState('environment'); // 'user' or 'environment'
+  const [rotateView, setRotateView] = useState(0);
+  const [facingMode, setFacingMode] = useState('environment');
   const [showCropper, setShowCropper] = useState(false);
   const [cropData, setCropData] = useState(null);
   const [manualEntryData, setManualEntryData] = useState(null);
@@ -125,7 +173,6 @@ function OCRLanding() {
 
   useEffect(() => {
     let mounted = true;
-    
     (async () => {
       try {
         setStatus('Loading OCR worker...');
@@ -149,9 +196,7 @@ function OCRLanding() {
         if (mounted) setStatus('OCR Error');
       }
     })();
-
     startCamera();
-
     return () => {
       mounted = false;
       stopCamera();
@@ -170,10 +215,8 @@ function OCRLanding() {
         },
         audio: false
       };
-      
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
-      
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.onloadedmetadata = () => {
@@ -198,39 +241,30 @@ function OCRLanding() {
 
   const captureFrame = () => {
     if (!videoRef.current || !canvasRef.current || !cameraActive) return;
-    
     try {
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      
-      // Draw full video frame to canvas
-      // If user rotated the view for easier framing, take that into account by drawing the video normally
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext('2d');
       ctx.drawImage(video, 0, 0);
       
-      // Calculate guide frame position and size relative to video
-      // Guide is 96% width, centered, with aspect-ratio 0.58
       const guideWidth = canvas.width * 0.96;
-      const guideHeight = guideWidth / 0.58;  // aspect-ratio = width/height = 0.58
-      const guideX = (canvas.width - guideWidth) / 2;  // center horizontally
-      const guideY = (canvas.height - guideHeight) / 2;  // center vertically
+      const guideHeight = guideWidth / 0.58;
+      const guideX = (canvas.width - guideWidth) / 2;
+      const guideY = (canvas.height - guideHeight) / 2;
       
-      // Create a new canvas with only the guide area
       const croppedCanvas = document.createElement('canvas');
       croppedCanvas.width = guideWidth;
       croppedCanvas.height = guideHeight;
       const croppedCtx = croppedCanvas.getContext('2d');
       
-      // Copy only the guide region from the original canvas
       croppedCtx.drawImage(
         canvas,
-        guideX, guideY, guideWidth, guideHeight,  // source rect
-        0, 0, guideWidth, guideHeight              // dest rect
+        guideX, guideY, guideWidth, guideHeight,
+        0, 0, guideWidth, guideHeight
       );
       
-      // Normalize orientation: prefer using device/screen orientation when available
       let finalCanvas = croppedCanvas;
       try {
         let desiredRotation = 0;
@@ -264,35 +298,24 @@ function OCRLanding() {
     }
   };
 
-  // Allow rotating the live preview (for user's framing convenience)
-  const rotateLiveView = () => {
-    setRotateView(prev => (prev + 90) % 360);
-  };
-
-  // Toggle between front and back camera
+  const rotateLiveView = () => setRotateView(prev => (prev + 90) % 360);
   const toggleCamera = () => {
     stopCamera();
     setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
     setTimeout(() => startCamera(), 100);
   };
-
-  // Crop functionality
-  const handleCropImage = () => {
-    setShowCropper(true);
-  };
-
+  const handleCropImage = () => setShowCropper(true);
   const applyCrop = (croppedImageData) => {
     setCapturedImage(croppedImageData);
     setShowCropper(false);
     setCropData(null);
   };
-
   const cancelCrop = () => {
     setShowCropper(false);
     setCropData(null);
   };
+  const openFilePicker = () => fileInputRef.current?.click();
 
-  // Rotate the captured image in preview before processing/saving
   const rotateCapturedPreview = async () => {
     if (!capturedImage) return;
     const img = new Image();
@@ -308,10 +331,6 @@ function OCRLanding() {
     img.src = capturedImage;
   };
 
-  // Trigger file input (visible upload button)
-  const openFilePicker = () => fileInputRef.current?.click();
-
-
   const processImage = async () => {
     if (!capturedImage || !workerRef.current) {
       showToast('❌ No image to process');
@@ -319,8 +338,8 @@ function OCRLanding() {
     }
 
     setMode('processing');
-    setStatus('Analyzing document...');
-    setProgress(0);
+    setStatus('Analyzing...');
+    setProgress(10);
     setModalType(null);
 
     try {
@@ -333,7 +352,12 @@ function OCRLanding() {
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0);
 
-          const { data: { text: t } } = await workerRef.current.recognize(canvas);
+          const processedCanvas = preprocessImage(canvas);
+          setProgress(30);
+
+          const { data: { text: t } } = await workerRef.current.recognize(processedCanvas);
+          setProgress(70);
+
           setRawText(t);
           const parsed = parseOCRText(t);
           setParsedData(parsed);
@@ -341,39 +365,23 @@ function OCRLanding() {
           let isValid = true;
           let issue = '';
           let missingFields = [];
+          const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
 
-          if (!parsed.transactionRef) {
-            missingFields.push('Transaction Reference');
-          } else {
-            // Require at least 15 digits in the transaction reference
-            const digitCount = (parsed.transactionRef.match(/\d/g) || []).length;
-            if (digitCount < 15) {
-              missingFields.push('Transaction Reference (insufficient digits)');
-            }
-          }
+          // Validation
+          if (!parsed.transactionRef) missingFields.push('Transaction Ref');
+          // Enforce 15 digits
+          else if (countDigits(parsed.transactionRef) < 15) missingFields.push('Transaction Ref (min 15 digits)');
 
-          if (!parsed.accountNumber) {
-            missingFields.push('Account Number');
-          }
+          if (!parsed.accountNumber) missingFields.push('Account Number');
+          if (!parsed.electricityBill) missingFields.push('Electricity Bill');
+          if (!parsed.date) missingFields.push('Date');
 
-          if (!parsed.customerName) {
-            missingFields.push('Customer Name');
-          }
-
-          if (!parsed.electricityBill) {
-            missingFields.push('Electricity Bill');
-          }
-
-          if (!parsed.date) {
-            missingFields.push('Date');
-          }
-
-          // If some fields are missing, show manual entry modal
           if (missingFields.length > 0) {
-            setManualEntryData({
-              ...parsed,
-              missingFields
-            });
+            // Pre-fill date for input if possible
+            const safeData = { ...parsed };
+            if (safeData.date) safeData.date = formatDateForInput(safeData.date);
+
+            setManualEntryData({ ...safeData, missingFields });
             setShowManualEntry(true);
             setMode('preview');
             setStatus('Ready');
@@ -381,55 +389,36 @@ function OCRLanding() {
             return;
           }
 
-          // Validate extracted data
-          if (!parsed.transactionRef) {
-            isValid = false;
-            issue = '❌ Transaction reference not found';
-          } else {
-            // Require at least 15 digits in the transaction reference
-            const digitCount = (parsed.transactionRef.match(/\d/g) || []).length;
-            if (digitCount < 15) {
-              isValid = false;
-              issue = '❌ Transaction reference must contain at least 15 digits';
-            }
+          // Strict Validity Checks
+          if (countDigits(parsed.transactionRef) < 15) {
+             isValid = false;
+             issue = '❌ Transaction reference must have at least 15 digits';
           }
-
-          if (isValid && !parsed.accountNumber) {
-            isValid = false;
-            issue = '❌ Account number not found';
-          }
-
           if (isValid && parsed.electricityBill) {
-            const billAmount = parseFloat(parsed.electricityBill.replace(/,/g, ''));
-            if (billAmount < 50) {
-              isValid = false;
-              issue = `⚠️ Bill (₱${parsed.electricityBill}) is less than ₱50`;
-            }
+             const amt = parseFloat(parsed.electricityBill);
+             if (isNaN(amt) || amt < 10) {
+               isValid = false;
+               issue = `⚠️ Bill Amount (₱${parsed.electricityBill}) seems invalid`;
+             }
           }
 
-          if (isValid && parsed.transactionRef) {
+          if (isValid) {
             try {
               const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-              console.log('[ocr] Checking duplicate transaction at', `${API_BASE}/api/check-transaction/${parsed.transactionRef}`);
               const res = await fetch(`${API_BASE}/api/check-transaction/${parsed.transactionRef}`);
-              if (!res.ok) {
-                console.error('[api] check-transaction non-OK response', res.status, await res.text());
-              } else {
-                const data = await res.json();
-                console.log('[api] check-transaction result:', data);
-                if (data.exists) {
-                  setModalType('duplicate');
-                  setErrorMessage(`Transaction already exists`);
-                  setMode('preview');
-                  setStatus('Ready');
-                  return;
+              if (res.ok) {
+                const d = await res.json();
+                if (d.exists) {
+                   setModalType('duplicate');
+                   setErrorMessage('Transaction already exists');
+                   setMode('preview');
+                   setStatus('Ready');
+                   return;
                 }
               }
-            } catch (err) {
-              console.error('[api] Duplicate check failed:', err.message || err);
-              showToast('⚠️ Could not verify duplicate transaction (network error).');
+            } catch (e) {
+              console.warn("Duplicate check skipped");
             }
-
             setModalType('success');
           } else {
             setModalType('error');
@@ -440,8 +429,9 @@ function OCRLanding() {
           setStatus('Ready');
           setProgress(100);
         } catch (err) {
+          console.error(err);
           setModalType('error');
-          setErrorMessage(`Processing error`);
+          setErrorMessage('Processing failed internally');
           setMode('preview');
           setStatus('Ready');
         }
@@ -455,87 +445,56 @@ function OCRLanding() {
     }
   };
 
-  // Helper function to rotate image using canvas
-  const rotateImageFile = (file, degrees) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-
-          if (degrees === 90 || degrees === 270) {
-            canvas.width = img.height;
-            canvas.height = img.width;
-          } else {
-            canvas.width = img.width;
-            canvas.height = img.height;
-          }
-
-          ctx.translate(canvas.width / 2, canvas.height / 2);
-          ctx.rotate((degrees * Math.PI) / 180);
-          ctx.drawImage(img, -img.width / 2, -img.height / 2);
-
-          canvas.toBlob((blob) => {
-            resolve(blob);
-          }, 'image/jpeg', 0.95);
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
-  };
-
   const saveToDatabase = async () => {
-    if (!parsedData) {
-      showToast('❌ No data to save');
-      return;
-    }
-
+    if (!parsedData) return;
     setStatus('Saving...');
     try {
       const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-      console.log('[ocr] Saving to database at', `${API_BASE}/api/ocr-data`);
       const res = await fetch(`${API_BASE}/api/ocr-data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsedData)
       });
-
       if (res.ok) {
-        const data = await res.json();
-        console.log('[api] save-ocr-data success:', data);
         showToast('✅ Saved successfully');
         setModalType(null);
         setShowManualEntry(false);
         resetCapture();
       } else {
-        const text = await res.text().catch(() => '');
-        console.error('[api] save-ocr-data failed', res.status, text);
         showToast(`❌ Failed to save: ${res.status}`);
       }
     } catch (err) {
-      console.error('[api] save-ocr-data network error:', err.message || err);
-      showToast(`❌ Network error: ${err && err.message ? err.message : 'Failed to fetch'}`);
+      showToast('❌ Network error');
     }
     setStatus('Ready');
   };
 
   const saveManualEntry = async () => {
-    if (!manualEntryData) {
-      showToast('❌ No data to save');
-      return;
-    }
+    if (!manualEntryData) return;
 
+    // --- 1. REQUIRED FIELDS VALIDATION ---
+    const required = [
+      { field: 'transactionRef', label: 'Transaction Reference' },
+      { field: 'date', label: 'Date' },
+      { field: 'customerName', label: 'Customer Name' },
+      { field: 'accountNumber', label: 'Account Number' }
+    ];
+
+    for (const item of required) {
+      if (!manualEntryData[item.field] || manualEntryData[item.field].toString().trim() === '') {
+        showToast(`❌ ${item.label} is required`);
+        return; // STOP: Do not save
+      }
+    }
+    // -------------------------------------
+
+    // 3. PROCEED TO SAVE
     setStatus('Saving...');
     try {
       const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-      console.log('[ocr] Saving manual entry to database at', `${API_BASE}/api/ocr-data`);
       
-      // Remove missingFields before saving
       const { missingFields, ...dataToSave } = manualEntryData;
-      
+
       const res = await fetch(`${API_BASE}/api/ocr-data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -543,20 +502,15 @@ function OCRLanding() {
       });
 
       if (res.ok) {
-        const data = await res.json();
-        console.log('[api] save-manual-entry success:', data);
         showToast('✅ Saved successfully');
         setShowManualEntry(false);
         setManualEntryData(null);
         resetCapture();
       } else {
-        const text = await res.text().catch(() => '');
-        console.error('[api] save-manual-entry failed', res.status, text);
         showToast(`❌ Failed to save: ${res.status}`);
       }
     } catch (err) {
-      console.error('[api] save-manual-entry network error:', err.message || err);
-      showToast(`❌ Network error: ${err && err.message ? err.message : 'Failed to fetch'}`);
+      showToast('❌ Network error');
     }
     setStatus('Ready');
   };
@@ -589,16 +543,15 @@ function OCRLanding() {
 
   return (
     <div className="ocr-scanner">
-      {/* Top Toolbar */}
       <div className="toolbar toolbar-top">
         <h1>Aneco Foundation</h1>
       </div>
 
-      {/* Main Content */}
       {mode === 'capture' && (
-        <div className="capture-container">
+        // LIGHTER THEME: Added light-mode class and inline background styles
+        <div className="capture-container light-mode" style={{ background: '#f0f2f5' }}>
           {cameraError ? (
-            <div className="error-state">
+            <div className="error-state" style={{ color: '#333' }}>
               <p className="error-text">{cameraError}</p>
               <button className="btn-retry" onClick={startCamera}>🔄 Retry Camera</button>
               <button className="btn-file" onClick={() => fileInputRef.current?.click()}>📁 Choose File</button>
@@ -613,16 +566,25 @@ function OCRLanding() {
                 muted 
                 className="camera-feed" 
                 style={{ 
-                  transform: `rotate(${rotateView}deg) ${facingMode === 'user' ? 'scaleX(-1)' : ''}` 
+                  transform: `rotate(${rotateView}deg) ${facingMode === 'user' ? 'scaleX(-1)' : ''}`,
+                  background: '#f0f2f5' // Light background for video area
                 }} 
               />
-              <div className="document-overlay">
+              {/* DOCUMENT OVERLAY: Lighter style */}
+              <div className="document-overlay" style={{ background: 'rgba(255,255,255,0.1)' }}>
+                 {/* Explicitly override the dark pseudo-element mask from CSS */}
+                <style>{`
+                  .document-overlay::after { background: radial-gradient(ellipse at center, transparent 0%, rgba(255, 255, 255, 0.5) 100%) !important; }
+                  .instruction-text { background: rgba(255, 255, 255, 0.8) !important; color: #333 !important; border: 1px solid #ccc !important; }
+                  .hint-text { background: rgba(255, 255, 255, 0.6) !important; color: #555 !important; }
+                  .document-frame { border-color: #2563eb !important; background: rgba(37, 99, 235, 0.05) !important; box-shadow: 0 0 0 1000px rgba(255,255,255,0.6) !important; }
+                `}</style>
                 <p className="instruction-text">Position your document</p>
                 <div className="document-frame">
-                  <div className="corner corner-tl"></div>
-                  <div className="corner corner-tr"></div>
-                  <div className="corner corner-bl"></div>
-                  <div className="corner corner-br"></div>
+                  <div className="corner corner-tl" style={{ borderColor: '#2563eb' }}></div>
+                  <div className="corner corner-tr" style={{ borderColor: '#2563eb' }}></div>
+                  <div className="corner corner-bl" style={{ borderColor: '#2563eb' }}></div>
+                  <div className="corner corner-br" style={{ borderColor: '#2563eb' }}></div>
                 </div>
                 <p className="hint-text">Align document inside the frame</p>
               </div>
@@ -637,35 +599,30 @@ function OCRLanding() {
             <div className="processing-overlay">
               <div className="spinner"></div>
               <p className="processing-text">Analyzing...</p>
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${progress}%` }}></div>
-              </div>
+              <div className="progress-bar"><div className="progress-fill" style={{ width: `${progress}%` }}></div></div>
             </div>
           )}
           <img src={capturedImage} alt="Document" className="preview-image" />
           {mode === 'preview' && (
-            <button className="btn-circle btn-rotate-preview" onClick={rotateCapturedPreview} title="Rotate Image" aria-label="Rotate image">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M5 5L3 7L5 9M15 5L17 7L15 9M15 15L17 17L15 19M5 15L3 17L5 19" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M10 2C6 2 3 5 3 9M10 18C14 18 17 15 17 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
+            <button className="btn-circle btn-rotate-preview" onClick={rotateCapturedPreview} title="Rotate">
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 5L3 7L5 9M15 5L17 7L15 9M15 15L17 17L15 19M5 15L3 17L5 19" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 2C6 2 3 5 3 9M10 18C14 18 17 15 17 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg>
             </button>
           )}
         </div>
       )}
 
-      {/* Success Modal */}
       {modalType === 'success' && parsedData && (
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header success-header">✅ Document Verified</div>
             <div className="modal-body">
               <div className="data-grid">
-                {parsedData.transactionRef && <div className="data-item"><span className="label">Ref:</span><span className="value">{parsedData.transactionRef}</span></div>}
-                {parsedData.accountNumber && <div className="data-item"><span className="label">Account:</span><span className="value">{parsedData.accountNumber}</span></div>}
-                {parsedData.customerName && <div className="data-item"><span className="label">Name:</span><span className="value">{parsedData.customerName}</span></div>}
-                {parsedData.electricityBill && <div className="data-item"><span className="label">Bill:</span><span className="value">₱{parsedData.electricityBill}</span></div>}
-                {parsedData.date && <div className="data-item"><span className="label">Date:</span><span className="value">{parsedData.date}</span></div>}
+                {/* DISPLAY ONLY 5 FIELDS */}
+                <div className="data-item"><span className="label">Ref:</span><span className="value">{parsedData.transactionRef}</span></div>
+                <div className="data-item"><span className="label">Date:</span><span className="value">{parsedData.date}</span></div>
+                <div className="data-item"><span className="label">Amount:</span><span className="value">₱{parsedData.electricityBill}</span></div>
+                <div className="data-item"><span className="label">Name:</span><span className="value">{parsedData.customerName}</span></div>
+                <div className="data-item"><span className="label">Account:</span><span className="value">{parsedData.accountNumber}</span></div>
               </div>
             </div>
             <div className="modal-footer">
@@ -676,88 +633,50 @@ function OCRLanding() {
         </div>
       )}
 
-      {/* Error Modal */}
       {modalType === 'error' && (
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header error-header">❌ Validation Failed</div>
-            <div className="modal-body">
-              <p className="error-message">{errorMessage}</p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-primary" onClick={resetCapture}>Retry</button>
-            </div>
+            <div className="modal-body"><p className="error-message">{errorMessage}</p></div>
+            <div className="modal-footer"><button className="btn-primary" onClick={resetCapture}>Retry</button></div>
           </div>
         </div>
       )}
 
-      {/* Duplicate Modal */}
       {modalType === 'duplicate' && (
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header duplicate-header">🔴 Duplicate Found</div>
-            <div className="modal-body">
-              <p className="error-message">{errorMessage}</p>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-primary" onClick={resetCapture}>Scan New</button>
-            </div>
+            <div className="modal-body"><p className="error-message">{errorMessage}</p></div>
+            <div className="modal-footer"><button className="btn-primary" onClick={resetCapture}>Scan New</button></div>
           </div>
         </div>
       )}
 
-      {/* Bottom Toolbar */}
       <div className="toolbar toolbar-bottom">
         {mode === 'capture' && (
           <div className="bottom-actions">
-            <button className="btn-circle btn-upload" onClick={openFilePicker} title="Upload File" aria-label="Upload file">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <rect x="6" y="5" width="8" height="11" stroke="currentColor" strokeWidth="1.5" fill="none" rx="1"/>
-                <path d="M8 8h4M8 11h4M8 14h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </button>
-            <button className="btn-circle btn-rotate" onClick={rotateLiveView} title="Rotate View" aria-label="Rotate camera view">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M5 5L3 7L5 9M15 5L17 7L15 9M15 15L17 17L15 19M5 15L3 17L5 19" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
-                <path d="M10 2C6 2 3 5 3 9M10 18C14 18 17 15 17 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </button>
-            <button className="btn-circle btn-confirm" onClick={captureFrame} disabled={!cameraActive} title="Capture Photo" aria-label="Capture photo">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" fill="none"/>
-                <circle cx="12" cy="12" r="5" fill="currentColor"/>
-              </svg>
-            </button>
-            <button className="btn-circle btn-flip" onClick={toggleCamera} title="Flip Camera" aria-label="Flip camera">
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M3 7C3 5.34315 4.34315 4 6 4H14C15.6569 4 17 5.34315 17 7V13C17 14.6569 15.6569 16 14 16H6C4.34315 16 3 14.6569 3 13V7Z" stroke="currentColor" strokeWidth="1.5"/>
-                <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.5"/>
-                <path d="M13 7.5L15 7.5M13 12.5L15 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
-              </svg>
-            </button>
+            <button className="btn-circle btn-upload" onClick={openFilePicker}><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><rect x="6" y="5" width="8" height="11" stroke="currentColor" strokeWidth="1.5" fill="none" rx="1"/><path d="M8 8h4M8 11h4M8 14h3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            <button className="btn-circle btn-rotate" onClick={rotateLiveView}><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M5 5L3 7L5 9M15 5L17 7L15 9M15 15L17 17L15 19M5 15L3 17L5 19" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 2C6 2 3 5 3 9M10 18C14 18 17 15 17 11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
+            <button className="btn-circle btn-confirm" onClick={captureFrame} disabled={!cameraActive}><svg width="24" height="24" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="2" fill="none"/><circle cx="12" cy="12" r="5" fill="currentColor"/></svg></button>
+            <button className="btn-circle btn-flip" onClick={toggleCamera}><svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 7C3 5.34315 4.34315 4 6 4H14C15.6569 4 17 5.34315 17 7V13C17 14.6569 15.6569 16 14 16H6C4.34315 16 3 14.6569 3 13V7Z" stroke="currentColor" strokeWidth="1.5"/><circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.5"/><path d="M13 7.5L15 7.5M13 12.5L15 12.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/></svg></button>
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileUpload} style={{ display: 'none' }} />
           </div>
         )}
-
         {mode === 'preview' && (
-          <div className="preview-actions">
-            <div className="preview-buttons">
-              <button className="btn-secondary" onClick={resetCapture}>Retake</button>
-              <button className="btn-secondary" onClick={handleCropImage}>Crop</button>
-              <button className="btn-primary" onClick={processImage}>Process Document</button>
-            </div>
-          </div>
+          <div className="preview-actions"><div className="preview-buttons"><button className="btn-secondary" onClick={resetCapture}>Retake</button><button className="btn-secondary" onClick={handleCropImage}>Crop</button><button className="btn-primary" onClick={processImage}>Process Document</button></div></div>
         )}
       </div>
 
-      {/* Manual Entry Modal */}
       {showManualEntry && manualEntryData && (
         <div className="modal-overlay">
           <div className="modal-card manual-entry-modal">
-            <div className="modal-header warning-header">✏️ Complete Missing Information</div>
+            <div className="modal-header warning-header">✏️ Edit / Complete Information</div>
             <div className="modal-body">
-              <p className="info-text">Some fields could not be extracted. Please fill in the missing information:</p>
+              <p className="info-text">Please verify and correct the details below:</p>
               <div className="manual-entry-form">
+                
+                {/* 1. Transaction Ref */}
                 <div className="form-group">
                   <label>Transaction Reference {!manualEntryData.transactionRef && <span className="required">*</span>}</label>
                   <input
@@ -767,17 +686,35 @@ function OCRLanding() {
                     placeholder="Enter transaction reference"
                     className={!manualEntryData.transactionRef ? 'missing-field' : ''}
                   />
+                  {(manualEntryData.transactionRef || '').replace(/[^0-9]/g, '').length < 15 && (
+                    <span style={{fontSize: '11px', color: '#dc2626'}}>Must be at least 15 digits</span>
+                  )}
                 </div>
+
+                {/* 2. Date (Calendar Format) */}
                 <div className="form-group">
-                  <label>Account Number {!manualEntryData.accountNumber && <span className="required">*</span>}</label>
+                  <label>Date {!manualEntryData.date && <span className="required">*</span>}</label>
                   <input
-                    type="text"
-                    value={manualEntryData.accountNumber || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, accountNumber: e.target.value})}
-                    placeholder="Enter account number"
-                    className={!manualEntryData.accountNumber ? 'missing-field' : ''}
+                    type="date"
+                    value={manualEntryData.date || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, date: e.target.value})}
+                    className={!manualEntryData.date ? 'missing-field' : ''}
                   />
                 </div>
+
+                {/* 3. Amount */}
+                <div className="form-group">
+                  <label>Amount (Bill) {!manualEntryData.electricityBill && <span className="required">*</span>}</label>
+                  <input
+                    type="text"
+                    value={manualEntryData.electricityBill || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, electricityBill: e.target.value})}
+                    placeholder="Enter amount"
+                    className={!manualEntryData.electricityBill ? 'missing-field' : ''}
+                  />
+                </div>
+
+                {/* 4. Name */}
                 <div className="form-group">
                   <label>Customer Name {!manualEntryData.customerName && <span className="required">*</span>}</label>
                   <input
@@ -788,53 +725,19 @@ function OCRLanding() {
                     className={!manualEntryData.customerName ? 'missing-field' : ''}
                   />
                 </div>
+
+                {/* 5. Account Number */}
                 <div className="form-group">
-                  <label>Date {!manualEntryData.date && <span className="required">*</span>}</label>
+                  <label>Account Number {!manualEntryData.accountNumber && <span className="required">*</span>}</label>
                   <input
                     type="text"
-                    value={manualEntryData.date || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, date: e.target.value})}
-                    placeholder="MM/DD/YYYY or Month Day, Year"
-                    className={!manualEntryData.date ? 'missing-field' : ''}
+                    value={manualEntryData.accountNumber || ''}
+                    onChange={(e) => setManualEntryData({...manualEntryData, accountNumber: e.target.value})}
+                    placeholder="Enter account number"
+                    className={!manualEntryData.accountNumber ? 'missing-field' : ''}
                   />
                 </div>
-                <div className="form-group">
-                  <label>Electricity Bill {!manualEntryData.electricityBill && <span className="required">*</span>}</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.electricityBill || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, electricityBill: e.target.value})}
-                    placeholder="Enter amount"
-                    className={!manualEntryData.electricityBill ? 'missing-field' : ''}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Amount Due</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.amountDue || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, amountDue: e.target.value})}
-                    placeholder="Enter amount due (optional)"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Total Sales</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.totalSales || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, totalSales: e.target.value})}
-                    placeholder="Enter total sales (optional)"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Company</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.company || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, company: e.target.value})}
-                    placeholder="Enter company name (optional)"
-                  />
-                </div>
+
               </div>
             </div>
             <div className="modal-footer">
@@ -845,26 +748,18 @@ function OCRLanding() {
         </div>
       )}
 
-      {/* Image Cropper Modal */}
       {showCropper && capturedImage && (
         <div className="modal-overlay">
           <div className="modal-card cropper-modal">
             <div className="modal-header">✂️ Crop Image</div>
             <div className="modal-body cropper-body">
-              <ImageCropper
-                image={capturedImage}
-                onCropComplete={applyCrop}
-                onCancel={cancelCrop}
-              />
+              <ImageCropper image={capturedImage} onCropComplete={applyCrop} onCancel={cancelCrop} />
             </div>
           </div>
         </div>
       )}
 
-      {/* Toast */}
       {toast && <div className="toast">{toast}</div>}
-
-      {/* Hidden Canvas */}
       <canvas ref={canvasRef} style={{ display: 'none' }} />
     </div>
   );
