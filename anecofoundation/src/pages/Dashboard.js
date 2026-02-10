@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import './Dashboard.css';
@@ -19,6 +19,9 @@ export default function Dashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(null);
   // Search/filter query
   const [searchQuery, setSearchQuery] = useState('');
+  const [amountFilterMode, setAmountFilterMode] = useState('all');
+  const [amountThreshold, setAmountThreshold] = useState('');
+  const [amountSortOrder, setAmountSortOrder] = useState('none');
   const navigate = useNavigate();
   const tableRef = useRef(null);
   const exportMenuRef = useRef(null);
@@ -82,6 +85,7 @@ export default function Dashboard() {
         id: row.id,
         accountNumber: row.accountNumber || '',
         accountName: row.customerName || '',
+        scannerName: row.scannerName || '',
         referenceNo: row.transactionRef || '',
         // Show electricity_bill in the AMOUNT column
         amount:
@@ -143,6 +147,7 @@ export default function Dashboard() {
         return (
           row.accountNumber === rowToUpdate.accountNumber &&
           row.accountName === rowToUpdate.accountName &&
+          row.scannerName === rowToUpdate.scannerName &&
           row.referenceNo === rowToUpdate.referenceNo &&
           row.amount === rowToUpdate.amount
         );
@@ -185,6 +190,7 @@ export default function Dashboard() {
               transactionRef: row.referenceNo || null,
               accountNumber: row.accountNumber || null,
               customerName: row.accountName || null,
+              scannerName: row.scannerName || null,
               company: null,
               date: null,
               electricityBill: row.amount || null,
@@ -205,6 +211,7 @@ export default function Dashboard() {
               transactionRef: row.referenceNo || null,
               accountNumber: row.accountNumber || null,
               customerName: row.accountName || null,
+              scannerName: row.scannerName || null,
               company: null,
               date: null,
               electricityBill: row.amount || null,
@@ -232,7 +239,7 @@ export default function Dashboard() {
   const addRow = () => {
     setTableData((prev) => [
       ...prev,
-      { id: null, accountNumber: '', accountName: '', referenceNo: '', amount: '' },
+      { id: null, accountNumber: '', accountName: '', scannerName: '', referenceNo: '', amount: '' },
     ]);
   };
 
@@ -247,6 +254,7 @@ export default function Dashboard() {
         return (
           row.accountNumber === rowToDelete.accountNumber &&
           row.accountName === rowToDelete.accountName &&
+          row.scannerName === rowToDelete.scannerName &&
           row.referenceNo === rowToDelete.referenceNo &&
           row.amount === rowToDelete.amount
         );
@@ -262,29 +270,77 @@ export default function Dashboard() {
     });
   };
 
-  // Filter table data based on search query
-  const filteredTableData = tableData.filter((row) => {
-    if (!searchQuery.trim()) return true;
-    
+  const parseAmount = (value) => {
+    const normalized = String(value ?? '').replace(/,/g, '').trim();
+    if (!normalized) return null;
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const displayTableData = useMemo(() => {
     const query = searchQuery.toLowerCase().trim();
-    const accountNumber = (row.accountNumber || '').toLowerCase();
-    const accountName = (row.accountName || '').toLowerCase();
-    const referenceNo = (row.referenceNo || '').toLowerCase();
-    const amount = (row.amount || '').toLowerCase();
-    
-    return (
-      accountNumber.includes(query) ||
-      accountName.includes(query) ||
-      referenceNo.includes(query) ||
-      amount.includes(query)
-    );
-  });
+    const threshold = parseAmount(amountThreshold);
+
+    let rows = tableData.filter((row) => {
+      const accountNumber = (row.accountNumber || '').toLowerCase();
+      const accountName = (row.accountName || '').toLowerCase();
+      const scannerName = (row.scannerName || '').toLowerCase();
+      const referenceNo = (row.referenceNo || '').toLowerCase();
+      const amount = (row.amount || '').toLowerCase();
+
+      const matchesSearch =
+        !query ||
+        accountNumber.includes(query) ||
+        accountName.includes(query) ||
+        scannerName.includes(query) ||
+        referenceNo.includes(query) ||
+        amount.includes(query);
+
+      if (!matchesSearch) return false;
+
+      const rowAmount = parseAmount(row.amount);
+      if (amountFilterMode === 'below' && threshold !== null) {
+        return rowAmount !== null && rowAmount < threshold;
+      }
+      if (amountFilterMode === 'above' && threshold !== null) {
+        return rowAmount !== null && rowAmount > threshold;
+      }
+      return true;
+    });
+
+    if (amountSortOrder !== 'none') {
+      rows = [...rows].sort((a, b) => {
+        const amountA = parseAmount(a.amount);
+        const amountB = parseAmount(b.amount);
+
+        // Keep non-numeric values at the end for a cleaner numeric sort.
+        if (amountA === null && amountB === null) return 0;
+        if (amountA === null) return 1;
+        if (amountB === null) return -1;
+
+        return amountSortOrder === 'asc' ? amountA - amountB : amountB - amountA;
+      });
+    }
+
+    return rows;
+  }, [tableData, searchQuery, amountFilterMode, amountThreshold, amountSortOrder]);
+
+  const hasActiveFilters = Boolean(searchQuery.trim()) || amountFilterMode !== 'all';
 
   const exportToExcel = () => {
     try {
       const XLSX = require('xlsx');
-      const table = tableRef.current;
-      const workbook = XLSX.utils.table_to_book(table);
+      const exportRows = displayTableData.map((row, index) => ({
+        'NO.': index + 1,
+        'ACCOUNT NUMBER': row.accountNumber || '',
+        'ACCOUNT NAME': row.accountName || '',
+        'TRANSACTION REFERENCE': row.referenceNo || '',
+        AMOUNT: row.amount || '',
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(exportRows);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Dashboard');
       XLSX.writeFile(workbook, 'dashboard_export.xlsx');
       setShowExportMenu(false);
     } catch (error) {
@@ -420,7 +476,7 @@ export default function Dashboard() {
       let yPos = currentY + headerFontSize * 0.5; // Minimal spacing after event detail
 
       // Prepare table data
-      const tableBody = filteredTableData.map((row, index) => [
+      const tableBody = displayTableData.map((row, index) => [
         String(index + 1),
         row.accountNumber || '',
         row.accountName || '',
@@ -436,15 +492,15 @@ export default function Dashboard() {
       // Adaptive column widths (percentages of available width)
       const columnWidths = {
         0: availableWidth * 0.08,  // NO. - 8%
-        1: availableWidth * 0.22, // ACCOUNT NUMBER - 22%
-        2: availableWidth * 0.30, // ACCOUNT NAME - 30%
-        3: availableWidth * 0.22, // REFERENCE NO. - 22%
-        4: availableWidth * 0.18  // AMOUNT - 18%
+        1: availableWidth * 0.24, // ACCOUNT NUMBER - 24%
+        2: availableWidth * 0.28, // ACCOUNT NAME - 28%
+        3: availableWidth * 0.24, // TRANSACTION REFERENCE - 24%
+        4: availableWidth * 0.16  // AMOUNT - 16%
       };
 
       // Add table using autoTable
       doc.autoTable({
-        head: [['NO.', 'ACCOUNT NUMBER', 'ACCOUNT NAME', 'REFERENCE NO.', 'AMOUNT']],
+        head: [['NO.', 'ACCOUNT NUMBER', 'ACCOUNT NAME', 'TRANSACTION REFERENCE', 'AMOUNT']],
         body: tableBody,
         startY: yPos,
         margin: { left: margin, right: margin, top: yPos },
@@ -809,10 +865,10 @@ export default function Dashboard() {
 
             {/* Search Container - Above table, hidden in PDF export */}
             <div className="search-container no-export">
-              <input
+                      <input
                 type="text"
                 className="search-input"
-                placeholder="Search by account number, name, reference, or amount..."
+                placeholder="Search by scanner, account number, account name, transaction reference, or amount..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -825,6 +881,71 @@ export default function Dashboard() {
                   ✕
                 </button>
               )}
+              <div className="table-controls-row">
+                <div className="table-control-group">
+                  <label htmlFor="amount-filter-mode">Amount Filter</label>
+                  <select
+                    id="amount-filter-mode"
+                    className="table-control-select"
+                    value={amountFilterMode}
+                    onChange={(e) => setAmountFilterMode(e.target.value)}
+                  >
+                    <option value="all">All amounts</option>
+                    <option value="below">Below amount</option>
+                    <option value="above">Above amount</option>
+                  </select>
+                </div>
+
+                <div className="table-control-group">
+                  <label htmlFor="amount-threshold">Amount</label>
+                  <input
+                    id="amount-threshold"
+                    type="text"
+                    className="table-control-input"
+                    placeholder="e.g. 500"
+                    value={amountThreshold}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      const numberRegex = /^(\d+\.?\d*|\.\d+|)$/;
+                      if (value !== '' && !numberRegex.test(value)) return;
+                      setAmountThreshold(value);
+                    }}
+                  />
+                </div>
+
+                <div className="table-control-group">
+                  <label htmlFor="amount-sort-order">Sort Amount</label>
+                  <select
+                    id="amount-sort-order"
+                    className="table-control-select"
+                    value={amountSortOrder}
+                    onChange={(e) => setAmountSortOrder(e.target.value)}
+                  >
+                    <option value="none">Default order</option>
+                    <option value="asc">Low to High</option>
+                    <option value="desc">High to Low</option>
+                  </select>
+                </div>
+
+                <div className="table-control-group table-control-actions">
+                  <label>&nbsp;</label>
+                  <button
+                    type="button"
+                    className="table-filter-reset-btn"
+                    onClick={() => {
+                      setSearchQuery('');
+                      setAmountFilterMode('all');
+                      setAmountThreshold('');
+                      setAmountSortOrder('none');
+                    }}
+                  >
+                    Clear Filters
+                  </button>
+                </div>
+              </div>
+              <div className="table-results-summary">
+                Showing {displayTableData.length} of {tableData.length} records
+              </div>
             </div>
 
             {/* Desktop Table View */}
@@ -833,26 +954,39 @@ export default function Dashboard() {
                 <thead>
                   <tr>
                     <th>NO.</th>
+                    <th>SCANNED BY</th>
                     <th>ACCOUNT NUMBER</th>
                     <th>ACCOUNT NAME</th>
-                    <th>REFERENCE NO.</th>
+                    <th>TRANSACTION REFERENCE</th>
                     <th>AMOUNT</th>
                     {isEditMode && <th style={{ width: '60px' }}></th>}
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredTableData.length === 0 ? (
+                  {displayTableData.length === 0 ? (
                     <tr>
-                      <td colSpan={isEditMode ? 6 : 5} style={{ textAlign: 'center', padding: '20px' }}>
-                        {searchQuery ? 'No results found' : 'No data available'}
+                      <td colSpan={isEditMode ? 7 : 6} style={{ textAlign: 'center', padding: '20px' }}>
+                        {hasActiveFilters ? 'No results found' : 'No data available'}
                       </td>
                     </tr>
                   ) : (
-                    filteredTableData.map((row, index) => (
+                    displayTableData.map((row, index) => (
                       <tr key={index}>
                         <td>
                           {index + 1}
                         </td>
+                      <td>
+                        {isEditMode ? (
+                          <input
+                            type="text"
+                            value={row.scannerName}
+                            onChange={(e) => handleCellChange(row, 'scannerName', e.target.value)}
+                            className="cell-input"
+                          />
+                        ) : (
+                          row.scannerName
+                        )}
+                      </td>
                       <td>
                         {isEditMode ? (
                           <input
@@ -921,16 +1055,16 @@ export default function Dashboard() {
 
             {/* Mobile Card View */}
             <div className="mobile-cards">
-              {filteredTableData.length === 0 ? (
+              {displayTableData.length === 0 ? (
                 <div className="mobile-card">
                   <div className="mobile-card-body" style={{ textAlign: 'center', padding: '40px 20px' }}>
                     <div className="mobile-field-value">
-                      {searchQuery ? 'No results found' : 'No data available'}
+                      {hasActiveFilters ? 'No results found' : 'No data available'}
                     </div>
                   </div>
                 </div>
               ) : (
-                filteredTableData.map((row, index) => (
+                displayTableData.map((row, index) => (
                 <div key={index} className="mobile-card">
                   <div className="mobile-card-header">
                     <span className="mobile-card-number">#{index + 1}</span>
@@ -945,6 +1079,20 @@ export default function Dashboard() {
                     )}
                   </div>
                   <div className="mobile-card-body">
+                    <div className="mobile-field">
+                      <label>SCANNED BY</label>
+                      {isEditMode ? (
+                        <input
+                          type="text"
+                          value={row.scannerName}
+                          onChange={(e) => handleCellChange(row, 'scannerName', e.target.value)}
+                          className="mobile-cell-input"
+                          placeholder="Enter scanner name"
+                        />
+                      ) : (
+                        <div className="mobile-field-value">{row.scannerName || '-'}</div>
+                      )}
+                    </div>
                     <div className="mobile-field">
                       <label>ACCOUNT NUMBER</label>
                       {isEditMode ? (
@@ -974,7 +1122,7 @@ export default function Dashboard() {
                       )}
                     </div>
                     <div className="mobile-field">
-                      <label>REFERENCE NO.</label>
+                      <label>TRANSACTION REFERENCE</label>
                       {isEditMode ? (
                         <input
                           type="text"
