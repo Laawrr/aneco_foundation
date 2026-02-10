@@ -14,14 +14,20 @@
   align-items: center;
   justify-content: center;
   margin-bottom: 16px;
+  height: 80px;
+  width: 100%;
+  /* Reserve space to prevent layout shift */
+  position: relative;
 }
 
 .login-logo {
   height: 80px;
   width: auto;
-  width: 100%;
+  max-width: 100%;
   object-fit: contain;
   display: block;
+  /* Prevent stretching during load */
+  flex-shrink: 0;
 }
 
 .login-card {

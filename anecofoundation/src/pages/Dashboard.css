@@ -4,6 +4,8 @@
   padding: 0;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden; /* Prevent horizontal page scroll */
+  width: 100%;
 }
 
 .dashboard-label {
@@ -62,11 +64,128 @@
   box-shadow: 0 4px 8px rgba(211, 47, 47, 0.4);
 }
 
+/* Mobile Menu - Hidden on desktop */
+.mobile-menu-container {
+  display: none;
+  position: relative;
+}
+
+.mobile-menu-btn {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 32px;
+  height: 32px;
+  gap: 5px;
+}
+
+.burger-line {
+  width: 100%;
+  height: 3px;
+  background: #333;
+  border-radius: 2px;
+  transition: all 0.3s ease;
+}
+
+.mobile-menu-btn:hover .burger-line {
+  background: #d32f2f;
+}
+
+.mobile-menu-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  min-width: 150px;
+  margin-top: 8px;
+  overflow: hidden;
+  animation: slideDown 0.3s ease;
+}
+
+.mobile-menu-item {
+  display: block;
+  padding: 14px 20px;
+  color: #333;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 14px;
+  transition: background 0.2s ease;
+  text-align: left;
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.mobile-menu-item:hover {
+  background: #f5f5f5;
+}
+
+.mobile-menu-button {
+  color: #333;
+}
+
+.mobile-menu-button:hover {
+  background: #f0f0f0;
+}
+
+.mobile-menu-save {
+  color: #4caf50;
+}
+
+.mobile-menu-save:hover {
+  background: #e8f5e9;
+}
+
+.mobile-menu-cancel {
+  color: #808080;
+}
+
+.mobile-menu-cancel:hover {
+  background: #f5f5f5;
+}
+
+.mobile-menu-logout {
+  color: #d32f2f;
+}
+
+.mobile-menu-logout:hover {
+  background: #ffebee;
+}
+
+.mobile-menu-divider {
+  height: 1px;
+  background: #e0e0e0;
+  margin: 4px 0;
+}
+
+.mobile-export-submenu {
+  background: #f9f9f9;
+  border-top: 1px solid #e0e0e0;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.mobile-export-submenu .mobile-menu-item {
+  padding-left: 40px;
+  font-size: 13px;
+}
+
 .dashboard-main {
   flex: 1;
   padding: 32px;
   display: flex;
   justify-content: center;
+  overflow-x: hidden;
+  width: 100%;
 }
 
 .dashboard-card {
@@ -87,6 +206,89 @@
   margin-bottom: 24px;
 }
 
+.search-container {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto 20px auto;
+}
+
+.search-input {
+  width: 100%;
+  padding: 12px 40px 12px 16px;
+  border: 2px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  transition: all 0.3s ease;
+  box-sizing: border-box;
+}
+
+.search-input:focus {
+  outline: none;
+  border-color: #4caf50;
+  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.1);
+}
+
+.search-input::placeholder {
+  color: #999;
+}
+
+.search-clear-btn {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: #999;
+  color: #fff;
+  border: none;
+  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.search-clear-btn:hover {
+  background: #666;
+  transform: translateY(-50%) scale(1.1);
+}
+
+/* Hide search in PDF exports */
+.no-export {
+  display: block;
+}
+
+@media print {
+  .no-export {
+    display: none !important;
+  }
+}
+
+/* Also hide when html2pdf is processing */
+.pdf-content-wrapper .no-export {
+  /* Will be hidden by html2pdf's processing */
+}
+
+/* Hide button group on mobile - buttons are in hamburger menu */
+@media (max-width: 480px) {
+  .card-header {
+    display: none;
+  }
+
+  .search-container {
+    max-width: 100%;
+    margin: 0 0 16px 0;
+    padding: 0 4px;
+  }
+}
+
 .card-header h1 {
   margin: 0;
   font-size: 32px;
@@ -101,6 +303,7 @@
   gap: 20px;
   position: relative;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .edit-buttons-group {
@@ -265,29 +468,71 @@
   background: #e0e0e0;
 }
 
+/* Table wrapper for horizontal scrolling */
+.table-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+  margin: 0;
+  padding: 0;
+}
+
 .dashboard-table {
   width: 100%;
   border-collapse: collapse;
   table-layout: fixed;
-  border: 1px solid #999;
+  border: 1px solid #666;
+  min-width: 600px; /* Minimum width to ensure horizontal scroll on small screens */
+}
+
+/* Mobile Cards - Hidden on desktop */
+.mobile-cards {
+  display: none;
+}
+
+.mobile-card {
+  display: none;
+}
+
+/* Desktop table - visible by default */
+.desktop-table {
+  display: table;
+}
+
+/* PDF Export - Always use desktop table, hide mobile cards */
+.pdf-content-wrapper .mobile-cards {
+  display: none !important;
+}
+
+.pdf-content-wrapper .mobile-card {
+  display: none !important;
+}
+
+.pdf-content-wrapper .desktop-table {
+  display: table !important;
+}
+
+.pdf-content-wrapper .desktop-table {
+  display: table !important;
 }
 
 .dashboard-table thead {
-  background: #fff;
+  background: transparent;
 }
 
 .dashboard-table th {
   padding: 4px 8px;
   text-align: center;
   font-weight: 700;
-  color: #333;
+  color: #000;
   font-size: 12px;
-  border: 1px solid #999;
+  border: 1px solid #666;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   vertical-align: middle;
   height: 14px;
-  background: #fff;
+  background: transparent;
   word-wrap: break-word;
   word-break: break-word;
 }
@@ -310,8 +555,8 @@
 
 .dashboard-table td {
   padding: 2px 8px;
-  border: 1px solid #999;
-  color: #333;
+  border: 1px solid #666;
+  color: #000;
   font-size: 14px;
   height: 14px;
   vertical-align: middle;
@@ -319,6 +564,7 @@
   text-align: center;
   word-wrap: break-word;
   word-break: break-word;
+  background: transparent;
 }
 
 .dashboard-table td:first-child {
@@ -329,16 +575,16 @@
 }
 
 .dashboard-table tbody tr {
-  background: #fff;
+  background: transparent;
   transition: background-color 0.2s ease;
 }
 
 .dashboard-table tbody tr:nth-child(even) {
-  background: #f9f9f9;
+  background: transparent;
 }
 
 .dashboard-table tbody tr:hover {
-  background: #f0f0f0;
+  background: transparent;
 }
 
 .table-actions {
@@ -381,13 +627,13 @@
 .cell-input {
   width: 100%;
   padding: 8px 4px;
-  border: 1px solid #ff7a1a;
+  border: 1px solid #666;
   border-radius: 4px;
   font-size: 13px;
   font-family: inherit;
   box-sizing: border-box;
   transition: all 0.3s ease;
-  background: #fff;
+  background: transparent;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -395,12 +641,12 @@
 
 .cell-input:focus {
   outline: none;
-  border-color: #f68b40;
-  box-shadow: 0 0 4px rgba(246, 139, 64, 0.3);
+  border-color: #666;
+  box-shadow: none;
 }
 
 .cell-input:hover {
-  border-color: #f68b40;
+  border-color: #666;
 }
 
 .dashboard-footer {
@@ -413,28 +659,165 @@
   margin-top: auto;
 }
 
-/* Tablet (768px and below) */
-@media (max-width: 768px) {
+/* Galaxy Z Fold and iPad Air (481px - 1000px) */
+@media (min-width: 481px) and (max-width: 1000px) {
   .dashboard-header {
-    flex-direction: column;
-    gap: 16px;
-    align-items: flex-start;
     padding: 16px 20px;
   }
 
   .dashboard-main {
-    padding: 20px;
+    padding: 16px;
   }
 
   .dashboard-card {
-    padding: 24px;
+    padding: 20px;
     max-width: 100%;
   }
 
   .card-header {
-    flex-direction: column;
-    align-items: flex-start;
+    flex-direction: row !important;
+    justify-content: space-between !important;
+    align-items: center !important;
     gap: 12px;
+    display: flex !important;
+  }
+
+  .search-container {
+    max-width: 100%;
+    margin: 0 0 16px 0;
+  }
+
+  .card-header h1 {
+    font-size: 24px;
+  }
+
+  .button-group {
+    width: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    gap: 12px;
+  }
+
+  .btn-edit,
+  .btn-save,
+  .btn-cancel,
+  .btn-export {
+    flex: 0 0 auto;
+    min-width: 110px;
+    padding: 12px 24px;
+    font-size: 13px;
+    height: 44px;
+    width: auto;
+  }
+
+  /* Hide hamburger menu on foldable/tablet - show desktop buttons */
+  .mobile-menu-container {
+    display: none !important;
+  }
+
+  .desktop-logout {
+    display: block !important;
+  }
+
+  /* Ensure PDF header date is on the right */
+  .pdf-content-wrapper .pdf-header {
+    position: relative !important;
+  }
+
+  .pdf-content-wrapper .pdf-date {
+    text-align: right !important;
+    position: absolute !important;
+    right: 0 !important;
+    top: 0 !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    order: 0 !important;
+  }
+
+  /* Optimize PDF header for foldable screens */
+  .pdf-content-wrapper .pdf-header {
+    flex-wrap: nowrap !important;
+    gap: 16px !important;
+    position: relative !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-between !important;
+  }
+
+  .pdf-content-wrapper .pdf-header-center {
+    flex: 1 !important;
+    order: 0 !important;
+    padding: 0 20px !important;
+    text-align: center !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  .pdf-content-wrapper .pdf-company-name,
+  .pdf-content-wrapper .pdf-company-address,
+  .pdf-content-wrapper .pdf-event-title,
+  .pdf-content-wrapper .pdf-event-detail {
+    text-align: center !important;
+    width: 100% !important;
+  }
+
+  .pdf-company-name {
+    font-size: 13px;
+  }
+
+  .pdf-company-address {
+    font-size: 10px;
+  }
+
+  .pdf-event-title,
+  .pdf-event-detail {
+    font-size: 11px;
+  }
+
+  .dashboard-table {
+    font-size: 12px;
+  }
+
+  .dashboard-table th {
+    font-size: 11px;
+    padding: 6px 6px;
+  }
+
+  .dashboard-table td {
+    font-size: 12px;
+    padding: 8px 6px;
+  }
+}
+
+/* Tablet (768px and below) */
+@media (max-width: 768px) {
+  .dashboard-header {
+    flex-direction: row;
+    justify-content: flex-end;
+    padding: 16px 20px;
+  }
+
+  .dashboard-main {
+    padding: 16px;
+  }
+
+  .dashboard-card {
+    padding: 20px;
+    max-width: 100%;
+  }
+
+  .card-header {
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .search-container {
+    max-width: 100%;
+    margin: 0 0 16px 0;
   }
 
   .card-header h1 {
@@ -442,12 +825,91 @@
   }
 
   .button-group {
+    width: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+
+  .edit-buttons-group {
     width: 100%;
+    flex-wrap: wrap;
   }
 
   .btn-edit,
+  .btn-save,
+  .btn-cancel,
   .btn-export {
-    flex: 1;
+    flex: 0 0 auto; /* Don't grow, maintain original size */
+    min-width: 110px;
+    padding: 12px 32px;
+    font-size: 13px;
+    height: 44px;
+    width: auto; /* Auto width based on content */
+  }
+
+  .pdf-content-wrapper .pdf-header {
+    flex-wrap: nowrap !important;
+    gap: 16px !important;
+    position: relative !important;
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-between !important;
+  }
+
+  .pdf-content-wrapper .pdf-header-center {
+    flex: 1 !important;
+    order: 0 !important;
+    text-align: center !important;
+    padding: 0 20px !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+  }
+
+  .pdf-content-wrapper .pdf-company-name,
+  .pdf-content-wrapper .pdf-company-address,
+  .pdf-content-wrapper .pdf-event-title,
+  .pdf-content-wrapper .pdf-event-detail {
+    text-align: center !important;
+    width: 100% !important;
+  }
+
+  .pdf-content-wrapper .pdf-date {
+    text-align: right !important;
+    position: absolute !important;
+    right: 0 !important;
+    top: 0 !important;
+    flex: 0 0 auto !important;
+    width: auto !important;
+    order: 0 !important;
+  }
+
+  .pdf-company-name {
+    font-size: 12px;
+  }
+
+  .pdf-company-address {
+    font-size: 10px;
+  }
+
+  .pdf-event-title,
+  .pdf-event-detail {
+    font-size: 11px;
+  }
+
+  .dashboard-table {
+    font-size: 12px;
+  }
+
+  .dashboard-table th {
+    font-size: 11px;
+    padding: 6px 6px;
+  }
+
+  .dashboard-table td {
+    font-size: 12px;
+    padding: 8px 6px;
   }
 }
 
@@ -460,6 +922,8 @@
 
   .dashboard-header {
     padding: 12px 16px;
+    justify-content: flex-end;
+    position: relative;
   }
 
   .logo-circle {
@@ -467,46 +931,373 @@
     height: 56px;
   }
 
-  .logout-btn {
-    padding: 8px 16px;
-    font-size: 12px;
+  /* Hide desktop logout button on mobile */
+  .desktop-logout {
+    display: none !important;
+  }
+
+  /* Show mobile menu on mobile */
+  .mobile-menu-container {
+    display: block !important;
+  }
+
+  .mobile-menu-btn {
+    width: 36px;
+    height: 36px;
   }
 
   .dashboard-main {
-    padding: 12px;
+    padding: 8px;
+    overflow-x: hidden;
   }
 
   .dashboard-card {
-    padding: 16px;
+    padding: 12px;
     max-width: 100%;
+    border-radius: 8px;
   }
 
   .card-header {
-    margin-bottom: 16px;
+    display: none !important; /* Hide Edit/Export buttons on mobile - use hamburger menu instead */
   }
 
   .card-header h1 {
-    font-size: 18px;
+    display: none;
   }
 
   .button-group {
     gap: 8px;
+    flex-direction: column;
+    width: 100%;
+    align-items: stretch;
+  }
+
+  .edit-buttons-group {
+    flex-direction: column;
+    width: 100%;
+    gap: 8px;
   }
 
   .btn-edit,
+  .btn-save,
+  .btn-cancel {
+    padding: 12px 16px;
+    font-size: 13px;
+    width: 100%;
+    min-width: auto;
+    height: 44px;
+  }
+
   .btn-export {
-    padding: 6px 12px;
+    padding: 12px 16px;
+    font-size: 13px;
+    width: 100%;
+    min-width: auto;
+    height: 44px;
+  }
+
+  .export-container {
+    width: 100%;
+    position: relative;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .export-menu {
+    min-width: 200px;
+    right: 0;
+    left: auto;
+    width: auto;
+    max-width: calc(100vw - 32px);
+  }
+
+  /* PDF Content - Keep desktop layout for export */
+  .pdf-content-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* PDF Header - Always use desktop layout for proper export */
+  .pdf-content-wrapper .pdf-header {
+    display: grid !important;
+    grid-template-columns: auto 1fr auto !important;
+    align-items: flex-start !important;
+    gap: 16px !important;
+    margin-bottom: 30px !important;
+  }
+
+  .pdf-content-wrapper .pdf-logo-section {
+    grid-column: 1 !important;
+    justify-content: flex-start !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+  }
+
+  .pdf-content-wrapper .pdf-logo-img {
+    height: 70px !important;
+  }
+
+  .pdf-content-wrapper .pdf-header-center {
+    grid-column: 2 !important;
+    padding: 0 20px !important;
+    text-align: center !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    margin: 0 auto !important;
+    justify-self: center !important;
+  }
+
+  .pdf-content-wrapper .pdf-date {
+    grid-column: 3 !important;
+    text-align: right !important;
+    white-space: nowrap !important;
+    justify-self: end !important;
+  }
+
+  .pdf-content-wrapper .pdf-company-name {
+    font-size: 14px !important;
+    line-height: 1.3 !important;
+    text-align: center !important;
+    width: 100% !important;
+  }
+
+  .pdf-content-wrapper .pdf-company-address {
+    font-size: 11px !important;
+    line-height: 1.3 !important;
+    text-align: center !important;
+    width: 100% !important;
+  }
+
+  .pdf-content-wrapper .pdf-event-title {
+    font-size: 12px !important;
+    line-height: 1.3 !important;
+    text-align: center !important;
+    width: 100% !important;
+  }
+
+  .pdf-content-wrapper .pdf-event-detail {
+    font-size: 12px !important;
+    line-height: 1.3 !important;
+    text-align: center !important;
+    width: 100% !important;
+  }
+
+  .pdf-content-wrapper .pdf-date {
+    text-align: right !important;
+    order: 0 !important;
+    font-size: 12px !important;
+    width: auto !important;
+    flex: 0 0 auto !important;
+  }
+
+  /* Table Mobile Styles - Horizontal Scroll for viewing */
+  .pdf-content-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    width: 100%;
+  }
+
+  /* Table - Keep full width for PDF export */
+  .pdf-content-wrapper .dashboard-table {
+    min-width: 600px;
+    font-size: 14px !important;
+    display: table;
+    width: 100%;
+    table-layout: fixed;
+    border: 1px solid #666 !important;
+  }
+
+  .pdf-content-wrapper .dashboard-table thead {
+    background: transparent !important;
+  }
+
+  .pdf-content-wrapper .dashboard-table th {
+    font-size: 12px !important;
+    padding: 4px 8px !important;
+    background: transparent !important;
+    border: 1px solid #666 !important;
+    color: #000 !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+  }
+
+  .pdf-content-wrapper .dashboard-table td {
+    font-size: 14px !important;
+    padding: 2px 8px !important;
+    border: 1px solid #666 !important;
+    color: #000 !important;
+    background: transparent !important;
+  }
+
+  .pdf-content-wrapper .dashboard-table tbody tr {
+    background: transparent !important;
+  }
+
+  .pdf-content-wrapper .dashboard-table tbody tr:nth-child(even) {
+    background: transparent !important;
+  }
+
+  /* Mobile table styles - only for viewing, not PDF */
+  /* PDF content wrapper tables are handled separately above */
+  .dashboard-card .dashboard-table th {
+    padding: 8px 4px;
+    font-size: 9px;
+    white-space: nowrap;
+  }
+
+  .dashboard-card .dashboard-table th:first-child {
+    width: 40px;
+    min-width: 40px;
+  }
+
+  .dashboard-card .dashboard-table td {
+    padding: 8px 4px;
     font-size: 11px;
+    white-space: nowrap;
   }
 
-  .dashboard-table th {
-    padding: 10px 8px;
-    font-size: 10px;
+  .dashboard-card .dashboard-table td:first-child {
+    width: 40px;
+    min-width: 40px;
   }
 
-  .dashboard-table td {
-    padding: 12px 8px;
+  /* Hide desktop table on mobile, show cards instead */
+  /* But keep table visible for PDF export */
+  .pdf-content-wrapper .desktop-table {
+    display: table !important;
+  }
+
+  .pdf-content-wrapper .mobile-cards {
+    display: none !important;
+  }
+
+  /* Hide table and show cards on mobile (but not in PDF wrapper) */
+  /* On mobile: Always show table (with horizontal scroll), hide cards */
+  /* This ensures table is visible for both viewing and PDF export */
+  .pdf-content-wrapper .desktop-table {
+    display: table !important;
+  }
+
+  .pdf-content-wrapper .mobile-cards {
+    display: none !important;
+  }
+
+  .mobile-card {
+    display: block !important;
+    border: 1px solid #666;
+    border-radius: 8px;
+    margin-bottom: 16px;
+    background: transparent;
+    overflow: hidden;
+  }
+
+  .mobile-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #666;
+    background: transparent;
+  }
+
+  .mobile-card-number {
+    font-weight: 700;
+    font-size: 14px;
+    color: #000;
+  }
+
+  .mobile-delete-btn {
+    background: #f44336;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    width: 32px;
+    height: 32px;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .mobile-delete-btn:hover {
+    background: #e53935;
+  }
+
+  .mobile-card-body {
+    padding: 12px 16px;
+  }
+
+  .mobile-field {
+    margin-bottom: 16px;
+  }
+
+  .mobile-field:last-child {
+    margin-bottom: 0;
+  }
+
+  .mobile-field label {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    color: #000;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    letter-spacing: 0.5px;
+  }
+
+  .mobile-cell-input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #666;
+    border-radius: 4px;
+    font-size: 14px;
+    font-family: inherit;
+    box-sizing: border-box;
+    background: transparent;
+    color: #000;
+  }
+
+  .mobile-cell-input:focus {
+    outline: none;
+    border-color: #666;
+  }
+
+  .mobile-field-value {
+    padding: 10px 12px;
+    font-size: 14px;
+    color: #000;
+    min-height: 20px;
+  }
+
+  .cell-input {
+    padding: 6px 4px;
+    font-size: 11px;
+    min-width: 80px;
+  }
+
+  .row-delete-btn {
+    width: 24px;
+    height: 24px;
     font-size: 12px;
+  }
+
+  .table-actions {
+    justify-content: center;
+    margin-top: 12px;
+    margin-bottom: 16px;
+  }
+
+  .row-add-btn {
+    padding: 12px 20px;
+    font-size: 14px;
+    width: 100%;
+    border-radius: 6px;
   }
 
   .dashboard-footer {
@@ -525,18 +1316,38 @@
 }
 
 .pdf-header {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: flex-start;
   margin-bottom: 30px;
   position: relative;
+  gap: 16px;
+}
+
+/* Ensure center content is always centered in all layouts */
+.pdf-header-center {
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  justify-content: center !important;
+  text-align: center !important;
+  flex: 1 !important;
+  padding: 0 20px !important;
+}
+
+.pdf-company-name,
+.pdf-company-address,
+.pdf-event-title,
+.pdf-event-detail {
+  text-align: center !important;
+  width: 100% !important;
 }
 
 .pdf-logo-section {
   display: flex;
   align-items: center;
   gap: 12px;
-  flex: 0 0 auto;
+  grid-column: 1;
 }
 
 .pdf-logo-circle {
@@ -576,9 +1387,15 @@
 }
 
 .pdf-header-center {
-  flex: 1;
+  grid-column: 2;
   text-align: center;
   padding: 0 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto;
+  justify-self: center;
 }
 
 .pdf-company-name {
@@ -588,6 +1405,8 @@
   text-transform: uppercase;
   margin-bottom: 6px;
   line-height: 1.3;
+  text-align: center;
+  width: 100%;
 }
 
 .pdf-company-address {
@@ -595,6 +1414,8 @@
   color: #000;
   margin-bottom: 12px;
   line-height: 1.3;
+  text-align: center;
+  width: 100%;
 }
 
 .pdf-event-title {
@@ -604,6 +1425,8 @@
   text-transform: uppercase;
   margin-bottom: 4px;
   line-height: 1.3;
+  text-align: center;
+  width: 100%;
 }
 
 .pdf-event-detail {
@@ -612,17 +1435,70 @@
   color: #000;
   text-transform: uppercase;
   line-height: 1.3;
+  text-align: center;
+  width: 100%;
 }
 
 .pdf-date {
   font-size: 12px;
   color: #000;
   text-align: right;
-  flex: 0 0 auto;
   white-space: nowrap;
+  grid-column: 3;
+  justify-self: end;
 }
 
 .pdf-table {
   width: 100%;
   margin-top: 20px;
+}
+
+.pdf-content-wrapper {
+  width: 100%;
+}
+
+/* Ensure PDF content always uses desktop layout for proper export */
+@media print, (min-width: 1px) {
+  .pdf-content-wrapper .pdf-header {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    gap: 16px !important;
+    margin-bottom: 30px !important;
+  }
+
+  .pdf-content-wrapper .pdf-logo-section {
+    grid-column: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 12px !important;
+  }
+
+  .pdf-content-wrapper .pdf-header-center {
+    grid-column: 2 !important;
+    text-align: center !important;
+    padding: 0 20px !important;
+    margin: 0 auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+    justify-self: center !important;
+  }
+
+  .pdf-content-wrapper .pdf-company-name,
+  .pdf-content-wrapper .pdf-company-address,
+  .pdf-content-wrapper .pdf-event-title,
+  .pdf-content-wrapper .pdf-event-detail {
+    text-align: center !important;
+    width: 100% !important;
+  }
+
+  .pdf-content-wrapper .pdf-date {
+    grid-column: 3 !important;
+    text-align: right !important;
+    white-space: nowrap !important;
+    justify-self: end !important;
+  }
 }

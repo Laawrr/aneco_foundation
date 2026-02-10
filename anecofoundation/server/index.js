@@ -311,7 +311,8 @@ app.delete('/api/ocr-data/:id', async (req, res) => {
 });
 
 const port = process.env.PORT || 3001;
-const server = app.listen(port, () => console.log(`OCR server listening on :${port}`));
+const host = process.env.HOST || '0.0.0.0'; // Listen on all network interfaces
+const server = app.listen(port, host, () => console.log(`OCR server listening on ${host}:${port}`));
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
