@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './OCRLanding.css';
-import { createWorker, PSM } from 'tesseract.js'; // Imported PSM
+import { createWorker } from 'tesseract.js';
+import { useNavigate } from 'react-router-dom';
 import SignaturePad from './components/SignaturePad';
 import ImageCropper from './components/ImageCropper'; 
 
@@ -14,21 +15,19 @@ const cleanOCRNumber = (str) => {
             .replace(/Z/g, '2')
             .replace(/S/g, '5')
             .replace(/B/g, '8')
-            .replace(/[^\d.]/g, ''); // Strip everything that isn't a digit or dot
+            .replace(/[^\d.]/g, ''); 
 };
 
 // HELPER: Convert OCR date string to YYYY-MM-DD for HTML input
 const formatDateForInput = (dateString) => {
   if (!dateString) return '';
   const date = new Date(dateString);
-  if (isNaN(date.getTime())) return ''; // Invalid date
+  if (isNaN(date.getTime())) return ''; 
   return date.toISOString().split('T')[0];
 };
 
 const isFebruary2026 = (dateString) => {
   if (!dateString) return false;
-
-  // Prefer strict yyyy-mm-dd parsing for consistency with input[type="date"].
   const isoMatch = String(dateString).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) {
     const year = Number(isoMatch[1]);
@@ -37,13 +36,12 @@ const isFebruary2026 = (dateString) => {
     if (year !== 2026 || month !== 2) return false;
     return day >= 1 && day <= 29;
   }
-
   const parsed = new Date(dateString);
   if (isNaN(parsed.getTime())) return false;
   return parsed.getFullYear() === 2026 && parsed.getMonth() === 1;
 };
 
-// HELPER: Pre-process image (Grayscale + High Contrast) to help Tesseract
+// HELPER: Pre-process image (Grayscale + High Contrast)
 const preprocessImage = (originalCanvas) => {
   const width = originalCanvas.width;
   const height = originalCanvas.height;
@@ -52,25 +50,18 @@ const preprocessImage = (originalCanvas) => {
   processedCanvas.height = height;
   const ctx = processedCanvas.getContext('2d');
   
-  // Draw original
   ctx.drawImage(originalCanvas, 0, 0);
   
-  // Get pixel data
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
 
-  // Contrast factor (increase to boost text darkness)
-  const contrast = 60; // range 0-255
+  // Contrast factor
+  const contrast = 60; 
   const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
 
   for (let i = 0; i < data.length; i += 4) {
-    // Convert to Grayscale (Luma formula)
     const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-
-    // Apply Contrast
     let newValue = factor * (gray - 128) + 128;
-
-    // Clamp to 0-255
     newValue = Math.max(0, Math.min(255, newValue));
 
     data[i] = newValue;     // R
@@ -82,23 +73,18 @@ const preprocessImage = (originalCanvas) => {
   return processedCanvas;
 };
 
-// Parser function to extract structured data from OCR text
+// Parser function to extract structured data
 const parseOCRText = (text) => {
   const data = {};
   console.log("Raw OCR Text:", text);
 
   // 1. Transaction Ref
   const transMatch = text.match(/Trans[a-z]*\s*Ref[a-z]*\s*[:\.-]?\s*([0-9OIlZSB]{15,})/i);
-  
   if (transMatch) {
     let cleanedRef = cleanOCRNumber(transMatch[1]);
-    
-    // SAFETY: If it's longer than 18 digits, it's almost certainly noise. 
-    // If your refs are ALWAYS exactly 15 digits, change 20 to 15.
     if (cleanedRef.length > 20) {
       cleanedRef = cleanedRef.substring(0, 15); 
     }
-    
     data.transactionRef = cleanedRef;
   }
 
@@ -109,7 +95,6 @@ const parseOCRText = (text) => {
      data.accountNumber = 'B' + cleanOCRNumber(rawAcc.substring(1)); 
      data.customerName = accountMatch[2].trim();
   } else {
-    // Fallback
     const accountOnly = text.match(/\b(B\s*[\d\sOIl]{12,})\b/i);
     if (accountOnly) {
        const rawAcc = accountOnly[1].replace(/\s/g, '');
@@ -163,6 +148,7 @@ const rotateCanvas = (canvas, degrees) => {
 };
 
 function OCRLanding() {
+  const navigate = useNavigate();
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -196,6 +182,90 @@ function OCRLanding() {
   const workerRef = useRef(null);
   const savedModalTimerRef = useRef(null);
   const hasScannerIdentity = Boolean(scannerName.trim());
+  const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+
+  const routeToError = (title, message, details = []) => {
+    navigate('/error', {
+      state: {
+        title,
+        message,
+        details: Array.isArray(details) ? details : [details].filter(Boolean),
+      },
+    });
+  };
+
+  const normalizeAccountNumber = (value) =>
+    String(value || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '');
+
+  const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
+
+  const validateVerifiedData = (data) => {
+    if (!data) return ['Document verification data is missing'];
+
+    const errors = [];
+    const required = [
+      { field: 'transactionRef', label: 'Transaction Reference' },
+      { field: 'date', label: 'Date' },
+      { field: 'customerName', label: 'Customer Name' },
+      { field: 'accountNumber', label: 'Account Number' },
+      { field: 'electricityBill', label: 'Amount (Bill)' }
+    ];
+
+    for (const item of required) {
+      if (!data[item.field] || data[item.field].toString().trim() === '') {
+        errors.push(`${item.label} is required`);
+      }
+    }
+
+    if (data.transactionRef && countDigits(data.transactionRef) < 15) {
+      errors.push('Transaction reference must have at least 15 digits');
+    }
+
+    const normalizedAccount = normalizeAccountNumber(data.accountNumber);
+    if (normalizedAccount && !/^B\d{6,}$/.test(normalizedAccount)) {
+      errors.push('Account number must start with B and contain digits only');
+    }
+
+    const customerName = String(data.customerName || '').trim();
+    if (customerName && !/^[A-Za-z][A-Za-z\s,\-./']*$/.test(customerName)) {
+      errors.push('Customer Name must contain valid text only');
+    }
+
+    if (!isFebruary2026(data.date)) {
+      errors.push('Only dates within February 2026 are allowed');
+    }
+
+    const amountValue = parseFloat(String(data.electricityBill || '').replace(/,/g, '').trim());
+    if (isNaN(amountValue) || amountValue < 50) {
+      errors.push('Bill amount must be at least 50');
+    }
+
+    return errors;
+  };
+
+  const requireValidVerifiedData = (actionLabel, options = {}) => {
+    // Always use inline validation feedback (toast) and do not route away from modal
+    const fieldErrors = validateVerifiedData(editableVerifiedData);
+    if (fieldErrors.length > 0) {
+      showToast(`❌ ${fieldErrors[0]}`);
+      return false;
+    }
+    return true;
+  };
+
+  const checkAccountDuplicate = async (accountNumber) => {
+    const normalizedAccount = normalizeAccountNumber(accountNumber);
+    if (!normalizedAccount) return false;
+    const checkRes = await fetch(`${API_BASE}/api/check-account/${encodeURIComponent(normalizedAccount)}`);
+    if (!checkRes.ok) {
+      throw new Error(`Account duplicate check failed (${checkRes.status})`);
+    }
+    const checkData = await checkRes.json();
+    return Boolean(checkData.exists);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -213,8 +283,7 @@ function OCRLanding() {
         await worker.loadLanguage('eng');
         await worker.initialize('eng');
         
-        // OPTIMIZATION: Set Page Segmentation Mode to Single Block (6)
-        // This stops Tesseract from trying to analyze complex layouts, speeding up simple scans.
+        // OPTIMIZATION: Assume uniform text block to prevent analyzing layout
         await worker.setParameters({
           tessedit_pageseg_mode: '6',
         });
@@ -283,7 +352,7 @@ function OCRLanding() {
       const constraints = {
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
+          width: { ideal: 1280 }, // Requesting HD instead of max resolution
           height: { ideal: 720 }
         },
         audio: false
@@ -416,7 +485,7 @@ function OCRLanding() {
     }
   };
 
-  const rotateLiveView = () => setRotateView(prev => (prev + 90) % 360);
+  const rotateLiveView = () => setRotateView(prev => (prev - 90 + 360) % 360);
   const toggleCamera = () => {
     setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
   };
@@ -441,7 +510,7 @@ function OCRLanding() {
       tmp.height = img.height;
       const ctx = tmp.getContext('2d');
       ctx.drawImage(img, 0, 0);
-      const rotated = rotateCanvas(tmp, 90);
+      const rotated = rotateCanvas(tmp, -90);
       setCapturedImage(rotated.toDataURL('image/jpeg', 0.9));
     };
     img.src = capturedImage;
@@ -463,8 +532,8 @@ function OCRLanding() {
       img.onload = async () => {
         try {
           // OPTIMIZATION: Resize image to speed up Tesseract
-          // High-res images (12MP+) are overkill for OCR and slow it down.
-          // Resizing to max-width ~1000px increases speed by 5x-10x without losing accuracy for text.
+          // High-res images (12MP+) are overkill for OCR and slow it down drastically.
+          // Resizing to max-width ~1000px increases speed by 10x without losing text accuracy.
           const MAX_WIDTH = 1000;
           const scale = img.width > MAX_WIDTH ? MAX_WIDTH / img.width : 1;
           
@@ -474,9 +543,11 @@ function OCRLanding() {
           const ctx = canvas.getContext('2d');
           
           // Use nice smoothing for better quality at lower res
-          ctx.imageSmoothingQuality = 'medium';
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
+          // Preprocess the RESIZED image (much faster now)
           const processedCanvas = preprocessImage(canvas);
           setProgress(30);
 
@@ -505,6 +576,22 @@ function OCRLanding() {
             showToast(`⚠️ Review required: missing ${missingFields.join(', ')}`);
           }
 
+          const accountNumber = parsed.accountNumber || '';
+          if (accountNumber) {
+            const isDuplicate = await checkAccountDuplicate(accountNumber);
+            if (isDuplicate) {
+              setMode('preview');
+              setStatus('Ready');
+              setProgress(100);
+              routeToError(
+                'Duplicate Account Number',
+                `Account number ${normalizeAccountNumber(accountNumber)} is already in the database.`,
+                ['Do not proceed with Document Verified for duplicate accounts.', 'Please scan a different document.']
+              );
+              return;
+            }
+          }
+
           setModalType('success');
 
           setMode('preview');
@@ -512,18 +599,16 @@ function OCRLanding() {
           setProgress(100);
         } catch (err) {
           console.error(err);
-          setModalType('error');
-          setErrorMessage('Processing failed internally');
           setMode('preview');
           setStatus('Ready');
+          routeToError('Processing Failed', 'Document processing failed internally.', String(err));
         }
       };
       img.src = capturedImage;
     } catch (err) {
-      setModalType('error');
-      setErrorMessage(`Error: ${String(err)}`);
       setMode('preview');
       setStatus('Ready');
+      routeToError('Processing Failed', 'Unable to process the captured image.', String(err));
     }
   };
 
@@ -537,66 +622,39 @@ function OCRLanding() {
     setShowSignaturePad(false);
   };
 
+  const handleOpenSignaturePad = () => {
+    // Use inline validation so the user stays in the modal and sees a toast if fields are incomplete
+    if (!requireValidVerifiedData('adding a signature', { inline: true })) {
+      return;
+    }
+    setShowSignaturePad(true);
+  };
+
   const saveToDatabase = async (signature = null) => {
     if (!editableVerifiedData) return;
 
-    // Validate all required fields before saving
-    const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
-    const required = [
-      { field: 'transactionRef', label: 'Transaction Reference' },
-      { field: 'date', label: 'Date' },
-      { field: 'customerName', label: 'Customer Name' },
-      { field: 'accountNumber', label: 'Account Number' },
-      { field: 'electricityBill', label: 'Amount (Bill)' }
-    ];
-
-    // Check all required fields are filled
-    for (const item of required) {
-      if (!editableVerifiedData[item.field] || editableVerifiedData[item.field].toString().trim() === '') {
-        showToast(`❌ ${item.label} is required`);
-        setStatus('Ready');
-        return;
-      }
-    }
-
-    // Validate transaction reference has at least 15 digits
-    if (countDigits(editableVerifiedData.transactionRef) < 15) {
-      showToast('❌ Transaction reference must have at least 15 digits');
-      setStatus('Ready');
-      return;
-    }
-
-    // Validate date is within February 2026
-    if (!isFebruary2026(editableVerifiedData.date)) {
-      showToast('❌ Only dates within February 2026 are allowed');
-      setStatus('Ready');
-      return;
-    }
-
-    // Validate amount is valid (must be at least 50)
-    const amountValue = parseFloat(String(editableVerifiedData.electricityBill).replace(/,/g, '').trim());
-    if (isNaN(amountValue) || amountValue < 50) {
-      showToast('❌ Bill amount must be at least 50');
+    if (!requireValidVerifiedData('saving', { inline: true })) {
       setStatus('Ready');
       return;
     }
 
     setStatus('Saving...');
     try {
-      const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-
       try {
-        const checkRes = await fetch(`${API_BASE}/api/check-transaction/${editableVerifiedData.transactionRef}`);
-        if (checkRes.ok) {
-          const checkData = await checkRes.json();
-          if (checkData.exists) {
-            showToast('❌ Transaction reference already exists in database');
-            setStatus('Ready');
-            return;
-          }
+        const isDuplicate = await checkAccountDuplicate(editableVerifiedData.accountNumber);
+        if (isDuplicate) {
+          setStatus('Ready');
+          routeToError(
+            'Duplicate Account Number',
+            `Account number ${normalizeAccountNumber(editableVerifiedData.accountNumber)} already exists in the database.`,
+            ['Save was stopped to prevent duplicate account records.']
+          );
+          return;
         }
       } catch (err) {
-        console.warn('Duplicate check skipped:', err);
+        setStatus('Ready');
+        routeToError('Validation Service Error', 'Unable to verify account number uniqueness.', String(err));
+        return;
       }
 
       const dataToSave = {
@@ -604,7 +662,7 @@ function OCRLanding() {
         date: editableVerifiedData.date,
         electricityBill: String(editableVerifiedData.electricityBill).replace(/,/g, '').trim(),
         customerName: editableVerifiedData.customerName.trim(),
-        accountNumber: editableVerifiedData.accountNumber.trim(),
+        accountNumber: normalizeAccountNumber(editableVerifiedData.accountNumber),
         scannerName: scannerName.trim(),
         signature: signature || signatureData || null
       };
@@ -627,12 +685,13 @@ function OCRLanding() {
         setSignatureData(null);
         resetCapture();
       } else {
-        const text = await res.text().catch(() => '');
-        console.error('[api] save-ocr-data failed', res.status, text);
-        showToast(`❌ Failed to save: ${res.status}`);
+        const body = await res.json().catch(() => null);
+        const details = body && Array.isArray(body.details) ? body.details : [];
+        const errorText = body && body.error ? body.error : `Failed to save (status ${res.status})`;
+        routeToError('Save Failed', errorText, details);
       }
     } catch (err) {
-      showToast('❌ Network error');
+      routeToError('Network Error', 'Unable to reach the server while saving.', String(err));
     }
     setStatus('Ready');
   };
@@ -918,9 +977,9 @@ function OCRLanding() {
               <div className="modal-footer-actions">
                 <button className="btn-secondary btn-cancel" onClick={resetCapture}>Cancel</button>
                 {!signatureData ? (
-                  <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Add Signature</button>
+                  <button className="btn-secondary" onClick={handleOpenSignaturePad}>Add Signature</button>
                 ) : (
-                  <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Edit Signature</button>
+                  <button className="btn-secondary" onClick={handleOpenSignaturePad}>Edit Signature</button>
                 )}
               </div>
               <div className="modal-footer-save">
