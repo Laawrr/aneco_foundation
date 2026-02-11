@@ -11,9 +11,25 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: auto;
+  overflow: hidden;
   padding: 20px;
   min-height: 0;
+  /* Ensure the cropper occupies the available viewport on mobile */
+  height: calc(100vh - 140px);
+}
+
+/* Make the inner container adapt to available space and prevent overflow */
+.cropper-container {
+  position: relative;
+  max-width: 900px;
+  width: 100%;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
 }
 
 .cropper-container {
@@ -30,12 +46,13 @@
 
 .cropper-image {
   max-width: 100%;
-  max-height: calc(90vh - 200px);
-  width: auto;
+  width: 100%;
   height: auto;
+  max-height: calc(100vh - 220px);
   display: block;
   -webkit-user-drag: none;
   pointer-events: none;
+  object-fit: contain;
 }
 
 .crop-overlay {

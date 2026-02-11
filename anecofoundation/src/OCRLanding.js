@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './OCRLanding.css';
-import { createWorker, PSM } from 'tesseract.js'; // Imported PSM
+import { createWorker } from 'tesseract.js';
 import { useNavigate } from 'react-router-dom';
 import SignaturePad from './components/SignaturePad';
 import ImageCropper from './components/ImageCropper'; 
@@ -15,21 +15,19 @@ const cleanOCRNumber = (str) => {
             .replace(/Z/g, '2')
             .replace(/S/g, '5')
             .replace(/B/g, '8')
-            .replace(/[^\d.]/g, ''); // Strip everything that isn't a digit or dot
+            .replace(/[^\d.]/g, ''); 
 };
 
 // HELPER: Convert OCR date string to YYYY-MM-DD for HTML input
 const formatDateForInput = (dateString) => {
   if (!dateString) return '';
   const date = new Date(dateString);
-  if (isNaN(date.getTime())) return ''; // Invalid date
+  if (isNaN(date.getTime())) return ''; 
   return date.toISOString().split('T')[0];
 };
 
 const isFebruary2026 = (dateString) => {
   if (!dateString) return false;
-
-  // Prefer strict yyyy-mm-dd parsing for consistency with input[type="date"].
   const isoMatch = String(dateString).match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) {
     const year = Number(isoMatch[1]);
@@ -38,13 +36,12 @@ const isFebruary2026 = (dateString) => {
     if (year !== 2026 || month !== 2) return false;
     return day >= 1 && day <= 29;
   }
-
   const parsed = new Date(dateString);
   if (isNaN(parsed.getTime())) return false;
   return parsed.getFullYear() === 2026 && parsed.getMonth() === 1;
 };
 
-// HELPER: Pre-process image (Grayscale + High Contrast) to help Tesseract
+// HELPER: Pre-process image (Grayscale + High Contrast)
 const preprocessImage = (originalCanvas) => {
   const width = originalCanvas.width;
   const height = originalCanvas.height;
@@ -53,25 +50,18 @@ const preprocessImage = (originalCanvas) => {
   processedCanvas.height = height;
   const ctx = processedCanvas.getContext('2d');
   
-  // Draw original
   ctx.drawImage(originalCanvas, 0, 0);
   
-  // Get pixel data
   const imageData = ctx.getImageData(0, 0, width, height);
   const data = imageData.data;
 
-  // Contrast factor (increase to boost text darkness)
-  const contrast = 60; // range 0-255
+  // Contrast factor
+  const contrast = 60; 
   const factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
 
   for (let i = 0; i < data.length; i += 4) {
-    // Convert to Grayscale (Luma formula)
     const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-
-    // Apply Contrast
     let newValue = factor * (gray - 128) + 128;
-
-    // Clamp to 0-255
     newValue = Math.max(0, Math.min(255, newValue));
 
     data[i] = newValue;     // R
@@ -83,23 +73,18 @@ const preprocessImage = (originalCanvas) => {
   return processedCanvas;
 };
 
-// Parser function to extract structured data from OCR text
+// Parser function to extract structured data
 const parseOCRText = (text) => {
   const data = {};
   console.log("Raw OCR Text:", text);
 
   // 1. Transaction Ref
   const transMatch = text.match(/Trans[a-z]*\s*Ref[a-z]*\s*[:\.-]?\s*([0-9OIlZSB]{15,})/i);
-  
   if (transMatch) {
     let cleanedRef = cleanOCRNumber(transMatch[1]);
-    
-    // SAFETY: If it's longer than 18 digits, it's almost certainly noise. 
-    // If your refs are ALWAYS exactly 15 digits, change 20 to 15.
     if (cleanedRef.length > 20) {
       cleanedRef = cleanedRef.substring(0, 15); 
     }
-    
     data.transactionRef = cleanedRef;
   }
 
@@ -110,7 +95,6 @@ const parseOCRText = (text) => {
      data.accountNumber = 'B' + cleanOCRNumber(rawAcc.substring(1)); 
      data.customerName = accountMatch[2].trim();
   } else {
-    // Fallback
     const accountOnly = text.match(/\b(B\s*[\d\sOIl]{12,})\b/i);
     if (accountOnly) {
        const rawAcc = accountOnly[1].replace(/\s/g, '');
@@ -219,9 +203,7 @@ function OCRLanding() {
   const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
 
   const validateVerifiedData = (data) => {
-    if (!data) {
-      return ['Document verification data is missing'];
-    }
+    if (!data) return ['Document verification data is missing'];
 
     const errors = [];
     const required = [
@@ -265,18 +247,10 @@ function OCRLanding() {
   };
 
   const requireValidVerifiedData = (actionLabel, options = {}) => {
-    const { inline = false } = options;
+    // Always use inline validation feedback (toast) and do not route away from modal
     const fieldErrors = validateVerifiedData(editableVerifiedData);
     if (fieldErrors.length > 0) {
-      if (inline) {
-        showToast(`❌ ${fieldErrors[0]}`);
-        return false;
-      }
-      routeToError(
-        'Validation Failed',
-        `Please complete and correct all Document Verify fields before ${actionLabel}.`,
-        fieldErrors
-      );
+      showToast(`❌ ${fieldErrors[0]}`);
       return false;
     }
     return true;
@@ -309,8 +283,7 @@ function OCRLanding() {
         await worker.loadLanguage('eng');
         await worker.initialize('eng');
         
-        // OPTIMIZATION: Set Page Segmentation Mode to Single Block (6)
-        // This stops Tesseract from trying to analyze complex layouts, speeding up simple scans.
+        // OPTIMIZATION: Assume uniform text block to prevent analyzing layout
         await worker.setParameters({
           tessedit_pageseg_mode: '6',
         });
@@ -379,7 +352,7 @@ function OCRLanding() {
       const constraints = {
         video: {
           facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
+          width: { ideal: 1280 }, // Requesting HD instead of max resolution
           height: { ideal: 720 }
         },
         audio: false
@@ -559,8 +532,8 @@ function OCRLanding() {
       img.onload = async () => {
         try {
           // OPTIMIZATION: Resize image to speed up Tesseract
-          // High-res images (12MP+) are overkill for OCR and slow it down.
-          // Resizing to max-width ~1000px increases speed by 5x-10x without losing accuracy for text.
+          // High-res images (12MP+) are overkill for OCR and slow it down drastically.
+          // Resizing to max-width ~1000px increases speed by 10x without losing text accuracy.
           const MAX_WIDTH = 1000;
           const scale = img.width > MAX_WIDTH ? MAX_WIDTH / img.width : 1;
           
@@ -570,9 +543,11 @@ function OCRLanding() {
           const ctx = canvas.getContext('2d');
           
           // Use nice smoothing for better quality at lower res
-          ctx.imageSmoothingQuality = 'medium';
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = 'high';
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
 
+          // Preprocess the RESIZED image (much faster now)
           const processedCanvas = preprocessImage(canvas);
           setProgress(30);
 
@@ -648,7 +623,8 @@ function OCRLanding() {
   };
 
   const handleOpenSignaturePad = () => {
-    if (!requireValidVerifiedData('adding a signature')) {
+    // Use inline validation so the user stays in the modal and sees a toast if fields are incomplete
+    if (!requireValidVerifiedData('adding a signature', { inline: true })) {
       return;
     }
     setShowSignaturePad(true);
