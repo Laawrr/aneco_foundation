@@ -1,0 +1,106 @@
+.error-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 55%, #1d4ed8 100%);
+}
+
+.error-card {
+  width: min(720px, 100%);
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.28);
+  padding: 28px;
+  color: #0f172a;
+}
+
+.error-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #dc2626;
+  background: rgba(220, 38, 38, 0.12);
+  border: 1px solid rgba(220, 38, 38, 0.28);
+  border-radius: 999px;
+  padding: 6px 10px;
+  margin-bottom: 12px;
+}
+
+.error-card h1 {
+  margin: 0 0 8px;
+  font-size: 30px;
+  line-height: 1.2;
+}
+
+.error-message {
+  margin: 0;
+  color: #334155;
+  font-size: 16px;
+}
+
+.error-details {
+  margin: 16px 0 0;
+  padding: 12px 14px 12px 28px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: #f8fafc;
+  color: #1e293b;
+}
+
+.error-details li + li {
+  margin-top: 6px;
+}
+
+.error-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.error-actions .btn-primary,
+.error-actions .btn-secondary {
+  border: 0;
+  border-radius: 10px;
+  padding: 11px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.error-actions .btn-primary {
+  background: #2563eb;
+  color: #fff;
+}
+
+.error-actions .btn-primary:hover {
+  background: #1d4ed8;
+}
+
+.error-actions .btn-secondary {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.error-actions .btn-secondary:hover {
+  background: #cbd5e1;
+}
+
+@media (max-width: 640px) {
+  .error-card {
+    padding: 20px;
+  }
+
+  .error-card h1 {
+    font-size: 24px;
+  }
+
+  .error-actions {
+    flex-direction: column;
+  }
+}
+
