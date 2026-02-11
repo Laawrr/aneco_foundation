@@ -114,6 +114,93 @@ async function ensureOcrTable(conn) {
   }
 }
 
+function isSafeSignatureFilename(filename) {
+  const value = String(filename || '');
+  if (!value) return false;
+  if (value.includes('..') || value.includes('/') || value.includes('\\')) return false;
+  return true;
+}
+
+async function cleanupOrphanSignatureFiles(conn) {
+  await ensureOcrTable(conn);
+
+  const [rows] = await conn.query(
+    `SELECT signature_name AS signatureName
+     FROM ocr_data
+     WHERE signature_name IS NOT NULL AND signature_name <> ''`
+  );
+
+  const referencedFiles = new Set(
+    rows
+      .map((row) => row && row.signatureName)
+      .filter((name) => isSafeSignatureFilename(name))
+  );
+
+  let filesInDir = [];
+  try {
+    filesInDir = await fs.promises.readdir(signatureDir);
+  } catch (err) {
+    // If folder is unavailable, return stats without failing whole process.
+    console.warn('[cleanup] cannot read signature directory:', err && err.message ? err.message : err);
+    return { scanned: 0, deleted: 0, skipped: 0, errors: 1 };
+  }
+
+  let scanned = 0;
+  let deleted = 0;
+  let skipped = 0;
+  let errors = 0;
+
+  for (const fileName of filesInDir) {
+    if (!isSafeSignatureFilename(fileName)) {
+      skipped += 1;
+      continue;
+    }
+
+    // Only touch PNG signature files created by this app.
+    if (!fileName.toLowerCase().endsWith('.png')) {
+      skipped += 1;
+      continue;
+    }
+    if (!fileName.startsWith('signature_')) {
+      skipped += 1;
+      continue;
+    }
+
+    scanned += 1;
+    if (referencedFiles.has(fileName)) {
+      continue;
+    }
+
+    const filePath = path.join(signatureDir, fileName);
+    try {
+      await fs.promises.unlink(filePath);
+      deleted += 1;
+    } catch (unlinkErr) {
+      if (!unlinkErr || unlinkErr.code !== 'ENOENT') {
+        errors += 1;
+        console.error('[cleanup] failed to delete orphan signature:', fileName, unlinkErr);
+      }
+    }
+  }
+
+  return { scanned, deleted, skipped, errors };
+}
+
+async function runSignatureCleanupTask() {
+  let conn;
+  try {
+    conn = await getConnection();
+    const stats = await cleanupOrphanSignatureFiles(conn);
+    console.log('[cleanup] orphan signature cleanup complete:', stats);
+    return stats;
+  } catch (err) {
+    console.error('[cleanup] orphan signature cleanup failed:', err);
+    return null;
+  } finally {
+    if (conn) conn.release();
+  }
+}
+
 app.get('/health', async (req, res) => {
   const db = await testConnection();
   res.json({ ok: true, env: process.env.NODE_ENV || 'development', db });
@@ -130,6 +217,15 @@ app.post('/api/test-signature-write', async (req, res) => {
     console.error('[api] test signature write failed:', err);
     res.status(500).json({ ok: false, error: String(err) });
   }
+});
+
+// Manual cleanup endpoint for orphaned signature images.
+app.post('/api/cleanup-signature-storage', async (req, res) => {
+  const stats = await runSignatureCleanupTask();
+  if (!stats) {
+    return res.status(500).json({ ok: false, error: 'Cleanup failed' });
+  }
+  return res.json({ ok: true, ...stats });
 });
 
 // Endpoint to serve signature images
@@ -410,9 +506,46 @@ app.delete('/api/ocr-data/:id', async (req, res) => {
   try {
     conn = await getConnection();
 
+    // Read signature name first so we can clean up file after delete.
+    const [existingRows] = await conn.query(
+      'SELECT signature_name AS signatureName FROM ocr_data WHERE id = ? LIMIT 1',
+      [id]
+    );
+    const signatureName = existingRows && existingRows[0] ? existingRows[0].signatureName : null;
+
     const [result] = await conn.query('DELETE FROM ocr_data WHERE id = ?', [id]);
 
-    res.json({ ok: true, affectedRows: result.affectedRows });
+    let signatureDeleted = false;
+    let signatureDeleteError = null;
+    if (result.affectedRows > 0 && signatureName) {
+      // If another row still references the same signature, keep the file.
+      const [usageRows] = await conn.query(
+        'SELECT COUNT(*) AS refCount FROM ocr_data WHERE signature_name = ?',
+        [signatureName]
+      );
+      const refCount = usageRows && usageRows[0] ? Number(usageRows[0].refCount) : 0;
+
+      if (isSafeSignatureFilename(signatureName) && refCount === 0) {
+        const filePath = path.join(signatureDir, signatureName);
+        try {
+          await fs.promises.unlink(filePath);
+          signatureDeleted = true;
+        } catch (unlinkErr) {
+          if (!unlinkErr || unlinkErr.code !== 'ENOENT') {
+            signatureDeleteError = String(unlinkErr);
+            console.error('[api] Error deleting signature file:', unlinkErr);
+          }
+        }
+      }
+    }
+
+    res.json({
+      ok: true,
+      affectedRows: result.affectedRows,
+      signatureName: signatureName || null,
+      signatureDeleted,
+      signatureDeleteError,
+    });
   } catch (err) {
     console.error('[api] Error deleting OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
     res.status(500).json({ ok: false, error: String(err) });
@@ -424,6 +557,14 @@ app.delete('/api/ocr-data/:id', async (req, res) => {
 const port = process.env.PORT || 3001;
 const host = process.env.HOST || '0.0.0.0'; // Listen on all network interfaces
 const server = app.listen(port, host, () => console.log(`OCR server listening on ${host}:${port}`));
+
+// Cleanup once at boot, then periodically to remove any orphaned signature files.
+setTimeout(() => {
+  runSignatureCleanupTask();
+}, 1500);
+setInterval(() => {
+  runSignatureCleanupTask();
+}, 60 * 60 * 1000);
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
