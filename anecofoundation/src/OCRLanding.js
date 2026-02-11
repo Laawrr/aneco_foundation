@@ -3,6 +3,8 @@ import './OCRLanding.css';
 import { createWorker } from 'tesseract.js';
 import ImageCropper from './components/ImageCropper';
 
+const SCANNER_NAME_STORAGE_KEY = 'anecoScannerName';
+
 // HELPER: Convert "O" to "0", "l" to "1", etc. for numeric fields
 const cleanOCRNumber = (str) => {
   if (!str) return '';
@@ -20,6 +22,24 @@ const formatDateForInput = (dateString) => {
   const date = new Date(dateString);
   if (isNaN(date.getTime())) return ''; // Invalid date
   return date.toISOString().split('T')[0];
+};
+
+const isFebruary2026 = (dateString) => {
+  if (!dateString) return false;
+
+  // Prefer strict yyyy-mm-dd parsing for consistency with input[type="date"].
+  const isoMatch = String(dateString).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const year = Number(isoMatch[1]);
+    const month = Number(isoMatch[2]);
+    const day = Number(isoMatch[3]);
+    if (year !== 2026 || month !== 2) return false;
+    return day >= 1 && day <= 29;
+  }
+
+  const parsed = new Date(dateString);
+  if (isNaN(parsed.getTime())) return false;
+  return parsed.getFullYear() === 2026 && parsed.getMonth() === 1;
 };
 
 // HELPER: Pre-process image (Grayscale + High Contrast) to help Tesseract
@@ -83,10 +103,9 @@ const parseOCRText = (text) => {
     data.transactionRef = cleanedRef;
   }
 
-  // 2. Account Number & Customer Name (Updated to allow hyphens and slashes in names)
-  // Added \/ inside the character class for name: [A-Z,\s\-\/]
+  // 2. Account Number & Customer Name (Updated to allow hyphens in names)
+  // Added \- inside the character class for name
   const accountMatch = text.match(/(B\s*\d[\d\s]*)\s*\/\s*([A-Z,\s\-\/]+?)(?:\n|$)/i);
-  
   if (accountMatch) {
      const rawAcc = accountMatch[1].replace(/\s/g, '');
      data.accountNumber = 'B' + cleanOCRNumber(rawAcc.substring(1)); 
@@ -101,9 +120,7 @@ const parseOCRText = (text) => {
   }
 
   // 3. Date
-  const dateMatch = text.match(
-    /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i
-  );
+  const dateMatch = text.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i);
   if (dateMatch) {
     data.date = `${dateMatch[1]} ${dateMatch[2]}, ${dateMatch[3]}`;
   } else {
@@ -152,6 +169,9 @@ function OCRLanding() {
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
   const streamRef = useRef(null);
+  const captureContainerRef = useRef(null);
+  const guideFrameRef = useRef(null);
+  const userMenuRef = useRef(null);
   
   const [mode, setMode] = useState('capture');
   const [capturedImage, setCapturedImage] = useState(null);
@@ -168,9 +188,12 @@ function OCRLanding() {
   const [facingMode, setFacingMode] = useState('environment');
   const [showCropper, setShowCropper] = useState(false);
   const [cropData, setCropData] = useState(null);
-  const [manualEntryData, setManualEntryData] = useState(null);
-  const [showManualEntry, setShowManualEntry] = useState(false);
+  const [editableVerifiedData, setEditableVerifiedData] = useState(null);
+  const [scannerName, setScannerName] = useState(() => localStorage.getItem(SCANNER_NAME_STORAGE_KEY) || '');
+  const [scannerNameInput, setScannerNameInput] = useState(() => localStorage.getItem(SCANNER_NAME_STORAGE_KEY) || '');
+  const [showUserMenu, setShowUserMenu] = useState(false);
   const workerRef = useRef(null);
+  const hasScannerIdentity = Boolean(scannerName.trim());
 
   useEffect(() => {
     let mounted = true;
@@ -197,13 +220,45 @@ function OCRLanding() {
         if (mounted) setStatus('OCR Error');
       }
     })();
-    startCamera();
     return () => {
       mounted = false;
       stopCamera();
       if (workerRef.current) workerRef.current.terminate();
     };
   }, []);
+
+  useEffect(() => {
+    if (!hasScannerIdentity || mode !== 'capture') {
+      stopCamera();
+      return;
+    }
+
+    let active = true;
+    (async () => {
+      stopCamera();
+      if (!active) return;
+      await startCamera();
+    })();
+
+    return () => {
+      active = false;
+      stopCamera();
+    };
+  }, [hasScannerIdentity, mode, facingMode]);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (userMenuRef.current && !userMenuRef.current.contains(event.target)) {
+        setShowUserMenu(false);
+      }
+    };
+
+    if (showUserMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showUserMenu]);
 
   const startCamera = async () => {
     try {
@@ -245,25 +300,72 @@ function OCRLanding() {
     try {
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0);
-      
-      const guideWidth = canvas.width * 0.96;
-      const guideHeight = guideWidth / 0.58;
-      const guideX = (canvas.width - guideWidth) / 2;
-      const guideY = (canvas.height - guideHeight) / 2;
-      
+      const videoRect = video.getBoundingClientRect();
+      const frameRect = guideFrameRef.current?.getBoundingClientRect();
+
+      let sourceX;
+      let sourceY;
+      let sourceWidth;
+      let sourceHeight;
+
+      // Strict capture: map the guide frame (what user sees) to actual video pixels.
+      if (frameRect && video.videoWidth && video.videoHeight && videoRect.width && videoRect.height) {
+        const scale = Math.max(
+          videoRect.width / video.videoWidth,
+          videoRect.height / video.videoHeight
+        );
+        const renderedVideoWidth = video.videoWidth * scale;
+        const renderedVideoHeight = video.videoHeight * scale;
+        const renderOffsetX = (videoRect.width - renderedVideoWidth) / 2;
+        const renderOffsetY = (videoRect.height - renderedVideoHeight) / 2;
+
+        const frameLeftInVideo = frameRect.left - videoRect.left;
+        const frameTopInVideo = frameRect.top - videoRect.top;
+        const frameRightInVideo = frameLeftInVideo + frameRect.width;
+        const frameBottomInVideo = frameTopInVideo + frameRect.height;
+
+        const rawSourceLeft = (frameLeftInVideo - renderOffsetX) / scale;
+        const rawSourceTop = (frameTopInVideo - renderOffsetY) / scale;
+        const rawSourceRight = (frameRightInVideo - renderOffsetX) / scale;
+        const rawSourceBottom = (frameBottomInVideo - renderOffsetY) / scale;
+
+        const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
+        const left = clamp(rawSourceLeft, 0, video.videoWidth);
+        const top = clamp(rawSourceTop, 0, video.videoHeight);
+        const right = clamp(rawSourceRight, 0, video.videoWidth);
+        const bottom = clamp(rawSourceBottom, 0, video.videoHeight);
+
+        sourceX = left;
+        sourceY = top;
+        sourceWidth = Math.max(1, right - left);
+        sourceHeight = Math.max(1, bottom - top);
+      } else {
+        // Fallback to previous centered crop if frame bounds are unavailable.
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, 0, 0);
+
+        const guideWidth = canvas.width * 0.96;
+        const guideHeight = guideWidth / 0.58;
+        const guideX = (canvas.width - guideWidth) / 2;
+        const guideY = (canvas.height - guideHeight) / 2;
+
+        sourceX = guideX;
+        sourceY = guideY;
+        sourceWidth = guideWidth;
+        sourceHeight = guideHeight;
+      }
+
       const croppedCanvas = document.createElement('canvas');
-      croppedCanvas.width = guideWidth;
-      croppedCanvas.height = guideHeight;
+      croppedCanvas.width = Math.max(1, Math.round(sourceWidth));
+      croppedCanvas.height = Math.max(1, Math.round(sourceHeight));
       const croppedCtx = croppedCanvas.getContext('2d');
       
       croppedCtx.drawImage(
-        canvas,
-        guideX, guideY, guideWidth, guideHeight,
-        0, 0, guideWidth, guideHeight
+        video,
+        sourceX, sourceY, sourceWidth, sourceHeight,
+        0, 0, croppedCanvas.width, croppedCanvas.height
       );
       
       let finalCanvas = croppedCanvas;
@@ -301,9 +403,7 @@ function OCRLanding() {
 
   const rotateLiveView = () => setRotateView(prev => (prev + 90) % 360);
   const toggleCamera = () => {
-    stopCamera();
     setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
-    setTimeout(() => startCamera(), 100);
   };
   const handleCropImage = () => setShowCropper(true);
   const applyCrop = (croppedImageData) => {
@@ -362,69 +462,26 @@ function OCRLanding() {
           setRawText(t);
           const parsed = parseOCRText(t);
           setParsedData(parsed);
+          setEditableVerifiedData({
+            transactionRef: parsed.transactionRef || '',
+            date: formatDateForInput(parsed.date) || '',
+            electricityBill: parsed.electricityBill || '',
+            customerName: parsed.customerName || '',
+            accountNumber: parsed.accountNumber || ''
+          });
 
-          let isValid = true;
-          let issue = '';
-          let missingFields = [];
-          const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
-
-          // Validation
+          const missingFields = [];
           if (!parsed.transactionRef) missingFields.push('Transaction Ref');
-          // Enforce 15 digits
-          else if (countDigits(parsed.transactionRef) < 15) missingFields.push('Transaction Ref (min 15 digits)');
-
           if (!parsed.accountNumber) missingFields.push('Account Number');
+          if (!parsed.customerName) missingFields.push('Customer Name');
           if (!parsed.electricityBill) missingFields.push('Electricity Bill');
           if (!parsed.date) missingFields.push('Date');
 
           if (missingFields.length > 0) {
-            // Pre-fill date for input if possible
-            const safeData = { ...parsed };
-            if (safeData.date) safeData.date = formatDateForInput(safeData.date);
-
-            setManualEntryData({ ...safeData, missingFields });
-            setShowManualEntry(true);
-            setMode('preview');
-            setStatus('Ready');
-            setProgress(100);
-            return;
+            showToast(`⚠️ Review required: missing ${missingFields.join(', ')}`);
           }
 
-          // Strict Validity Checks
-          if (countDigits(parsed.transactionRef) < 15) {
-             isValid = false;
-             issue = '❌ Transaction reference must have at least 15 digits';
-          }
-          if (isValid && parsed.electricityBill) {
-             const amt = parseFloat(parsed.electricityBill);
-             if (isNaN(amt) || amt < 10) {
-               isValid = false;
-               issue = `⚠️ Bill Amount (₱${parsed.electricityBill}) seems invalid`;
-             }
-          }
-
-          if (isValid) {
-            try {
-              const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-              const res = await fetch(`${API_BASE}/api/check-transaction/${parsed.transactionRef}`);
-              if (res.ok) {
-                const d = await res.json();
-                if (d.exists) {
-                   setModalType('duplicate');
-                   setErrorMessage('Transaction already exists');
-                   setMode('preview');
-                   setStatus('Ready');
-                   return;
-                }
-              }
-            } catch (e) {
-              console.warn("Duplicate check skipped");
-            }
-            setModalType('success');
-          } else {
-            setModalType('error');
-            setErrorMessage(issue);
-          }
+          setModalType('success');
 
           setMode('preview');
           setStatus('Ready');
@@ -447,65 +504,76 @@ function OCRLanding() {
   };
 
   const saveToDatabase = async () => {
-    if (!parsedData) return;
-    setStatus('Saving...');
-    try {
-      const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-      const res = await fetch(`${API_BASE}/api/ocr-data`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(parsedData)
-      });
-      if (res.ok) {
-        showToast('✅ Saved successfully');
-        setModalType(null);
-        setShowManualEntry(false);
-        resetCapture();
-      } else {
-        showToast(`❌ Failed to save: ${res.status}`);
-      }
-    } catch (err) {
-      showToast('❌ Network error');
-    }
-    setStatus('Ready');
-  };
+    if (!editableVerifiedData) return;
 
-  const saveManualEntry = async () => {
-    if (!manualEntryData) return;
-
-    // --- 1. REQUIRED FIELDS VALIDATION ---
+    const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
     const required = [
       { field: 'transactionRef', label: 'Transaction Reference' },
       { field: 'date', label: 'Date' },
       { field: 'customerName', label: 'Customer Name' },
-      { field: 'accountNumber', label: 'Account Number' }
+      { field: 'accountNumber', label: 'Account Number' },
+      { field: 'electricityBill', label: 'Amount (Bill)' }
     ];
 
     for (const item of required) {
-      if (!manualEntryData[item.field] || manualEntryData[item.field].toString().trim() === '') {
+      if (!editableVerifiedData[item.field] || editableVerifiedData[item.field].toString().trim() === '') {
         showToast(`❌ ${item.label} is required`);
-        return; // STOP: Do not save
+        return;
       }
     }
-    // -------------------------------------
 
-    // 3. PROCEED TO SAVE
+    if (countDigits(editableVerifiedData.transactionRef) < 15) {
+      showToast('❌ Transaction reference must have at least 15 digits');
+      return;
+    }
+
+    if (!isFebruary2026(editableVerifiedData.date)) {
+      showToast('❌ Only dates within February 2026 are allowed');
+      return;
+    }
+
+    const amountValue = parseFloat(String(editableVerifiedData.electricityBill).replace(/,/g, '').trim());
+    if (isNaN(amountValue) || amountValue < 10) {
+      showToast('❌ Bill amount seems invalid');
+      return;
+    }
+
     setStatus('Saving...');
     try {
       const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-      
-      const { missingFields, ...dataToSave } = manualEntryData;
+
+      try {
+        const checkRes = await fetch(`${API_BASE}/api/check-transaction/${editableVerifiedData.transactionRef}`);
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (checkData.exists) {
+            showToast('❌ Transaction reference already exists in database');
+            setStatus('Ready');
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('Duplicate check skipped:', err);
+      }
+
+      const dataToSave = {
+        transactionRef: editableVerifiedData.transactionRef.trim(),
+        date: editableVerifiedData.date,
+        electricityBill: String(editableVerifiedData.electricityBill).replace(/,/g, '').trim(),
+        customerName: editableVerifiedData.customerName.trim(),
+        accountNumber: editableVerifiedData.accountNumber.trim(),
+        scannerName: scannerName.trim()
+      };
 
       const res = await fetch(`${API_BASE}/api/ocr-data`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(dataToSave)
       });
-
       if (res.ok) {
         showToast('✅ Saved successfully');
-        setShowManualEntry(false);
-        setManualEntryData(null);
+        setModalType(null);
+        setEditableVerifiedData(null);
         resetCapture();
       } else {
         showToast(`❌ Failed to save: ${res.status}`);
@@ -519,11 +587,62 @@ function OCRLanding() {
   const resetCapture = () => {
     setCapturedImage(null);
     setParsedData(null);
+    setEditableVerifiedData(null);
     setRawText('');
     setModalType(null);
     setMode('capture');
-    startCamera();
   };
+
+  const handleScannerNameSubmit = (event) => {
+    event.preventDefault();
+    const normalized = scannerNameInput.trim();
+    if (!normalized) {
+      showToast('❌ Please enter your name');
+      return;
+    }
+
+    localStorage.setItem(SCANNER_NAME_STORAGE_KEY, normalized);
+    setScannerName(normalized);
+    setShowUserMenu(false);
+    resetCapture();
+  };
+
+  const handleQuitScanner = () => {
+    localStorage.removeItem(SCANNER_NAME_STORAGE_KEY);
+    setScannerName('');
+    setScannerNameInput('');
+    setShowUserMenu(false);
+    setShowCropper(false);
+    setModalType(null);
+    setCapturedImage(null);
+    setParsedData(null);
+    setEditableVerifiedData(null);
+    setRawText('');
+    setMode('capture');
+    stopCamera();
+  };
+
+  const handleVerifiedFieldChange = (field, value) => {
+    setEditableVerifiedData((prev) => ({
+      ...(prev || {}),
+      [field]: value
+    }));
+  };
+
+  const autoResizeTextarea = (event) => {
+    const el = event.target;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  };
+
+  useEffect(() => {
+    if (modalType !== 'success') return;
+    const textareas = document.querySelectorAll('.data-item textarea.value');
+    textareas.forEach((el) => {
+      el.style.height = 'auto';
+      el.style.height = `${el.scrollHeight}px`;
+    });
+  }, [modalType, editableVerifiedData]);
 
   const showToast = (message) => {
     setToast(message);
@@ -546,11 +665,50 @@ function OCRLanding() {
     <div className="ocr-scanner">
       <div className="toolbar toolbar-top">
         <h1>Aneco Foundation</h1>
+        {hasScannerIdentity && (
+          <div className="scanner-user-menu" ref={userMenuRef}>
+            <button
+              type="button"
+              className="scanner-menu-btn"
+              onClick={() => setShowUserMenu((prev) => !prev)}
+              aria-label="Scanner options"
+            >
+              ☰
+            </button>
+            {showUserMenu && (
+              <div className="scanner-user-dropdown">
+                <div className="scanner-user-name">Scanner: {scannerName}</div>
+                <button type="button" className="scanner-quit-btn" onClick={handleQuitScanner}>
+                  Quit
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
-
+      {!hasScannerIdentity ? (
+        <div className="scanner-name-gate">
+          <form className="scanner-name-card" onSubmit={handleScannerNameSubmit}>
+            <h2>Scanner Setup</h2>
+            <p>Enter your name before scanning. This browser will remember it.</p>
+            <input
+              type="text"
+              value={scannerNameInput}
+              onChange={(e) => setScannerNameInput(e.target.value)}
+              placeholder="Enter your full name"
+              className="scanner-name-input"
+              autoFocus
+            />
+            <button type="submit" className="scanner-name-btn">
+              Continue to Scanner
+            </button>
+          </form>
+        </div>
+      ) : (
+        <>
       {mode === 'capture' && (
         // LIGHTER THEME: Added light-mode class and inline background styles
-        <div className="capture-container light-mode" style={{ background: '#f0f2f5' }}>
+        <div ref={captureContainerRef} className="capture-container light-mode" style={{ background: '#f0f2f5' }}>
           {cameraError ? (
             <div className="error-state" style={{ color: '#333' }}>
               <p className="error-text">{cameraError}</p>
@@ -578,16 +736,14 @@ function OCRLanding() {
                   .document-overlay::after { background: radial-gradient(ellipse at center, transparent 0%, rgba(255, 255, 255, 0.5) 100%) !important; }
                   .instruction-text { background: rgba(255, 255, 255, 0.8) !important; color: #333 !important; border: 1px solid #ccc !important; }
                   .hint-text { background: rgba(255, 255, 255, 0.6) !important; color: #555 !important; }
-                  .document-frame { border-color: #2563eb !important; background: rgba(37, 99, 235, 0.05) !important; box-shadow: 0 0 0 1000px rgba(255,255,255,0.6) !important; }
+                  .document-frame { border-color: #ffffff !important; background: rgba(37, 99, 235, 0.05) !important; box-shadow: 0 0 0 1000px rgba(255,255,255,0.6) !important; }
                 `}</style>
-                <p className="instruction-text">Position your document</p>
-                <div className="document-frame">
+                <div ref={guideFrameRef} className="document-frame">
                   <div className="corner corner-tl" style={{ borderColor: '#2563eb' }}></div>
                   <div className="corner corner-tr" style={{ borderColor: '#2563eb' }}></div>
                   <div className="corner corner-bl" style={{ borderColor: '#2563eb' }}></div>
                   <div className="corner corner-br" style={{ borderColor: '#2563eb' }}></div>
                 </div>
-                <p className="hint-text">Align document inside the frame</p>
               </div>
             </>
           )}
@@ -612,18 +768,77 @@ function OCRLanding() {
         </div>
       )}
 
-      {modalType === 'success' && parsedData && (
+      {modalType === 'success' && editableVerifiedData && (
         <div className="modal-overlay">
           <div className="modal-card">
             <div className="modal-header success-header">✅ Document Verified</div>
             <div className="modal-body">
               <div className="data-grid">
-                {/* DISPLAY ONLY 5 FIELDS */}
-                <div className="data-item"><span className="label">Ref:</span><span className="value">{parsedData.transactionRef}</span></div>
-                <div className="data-item"><span className="label">Date:</span><span className="value">{parsedData.date}</span></div>
-                <div className="data-item"><span className="label">Amount:</span><span className="value">₱{parsedData.electricityBill}</span></div>
-                <div className="data-item"><span className="label">Name:</span><span className="value">{parsedData.customerName}</span></div>
-                <div className="data-item"><span className="label">Account:</span><span className="value">{parsedData.accountNumber}</span></div>
+                <div className="data-item">
+                  <span className="label">Ref:</span>
+                  <textarea
+                    className="value"
+                    value={editableVerifiedData.transactionRef || ''}
+                    rows={1}
+                    onChange={(e) => {
+                      handleVerifiedFieldChange('transactionRef', e.target.value);
+                      autoResizeTextarea(e);
+                    }}
+                    onInput={autoResizeTextarea}
+                    placeholder="Enter transaction reference"
+                  />
+                </div>
+                <div className="data-item">
+                  <span className="label">Date:</span>
+                  <input
+                    type="date"
+                    className="value"
+                    value={editableVerifiedData.date || ''}
+                    onChange={(e) => handleVerifiedFieldChange('date', e.target.value)}
+                  />
+                </div>
+                <div className="data-item">
+                  <span className="label">Amount:</span>
+                  <textarea
+                    className="value"
+                    value={editableVerifiedData.electricityBill || ''}
+                    rows={1}
+                    onChange={(e) => {
+                      handleVerifiedFieldChange('electricityBill', e.target.value);
+                      autoResizeTextarea(e);
+                    }}
+                    onInput={autoResizeTextarea}
+                    placeholder="Enter bill amount"
+                  />
+                </div>
+                <div className="data-item">
+                  <span className="label">Name:</span>
+                  <textarea
+                    className="value"
+                    value={editableVerifiedData.customerName || ''}
+                    rows={1}
+                    onChange={(e) => {
+                      handleVerifiedFieldChange('customerName', e.target.value);
+                      autoResizeTextarea(e);
+                    }}
+                    onInput={autoResizeTextarea}
+                    placeholder="Enter customer name"
+                  />
+                </div>
+                <div className="data-item">
+                  <span className="label">Account:</span>
+                  <textarea
+                    className="value"
+                    value={editableVerifiedData.accountNumber || ''}
+                    rows={1}
+                    onChange={(e) => {
+                      handleVerifiedFieldChange('accountNumber', e.target.value);
+                      autoResizeTextarea(e);
+                    }}
+                    onInput={autoResizeTextarea}
+                    placeholder="Enter account number"
+                  />
+                </div>
               </div>
             </div>
             <div className="modal-footer">
@@ -668,85 +883,7 @@ function OCRLanding() {
           <div className="preview-actions"><div className="preview-buttons"><button className="btn-secondary" onClick={resetCapture}>Retake</button><button className="btn-secondary" onClick={handleCropImage}>Crop</button><button className="btn-primary" onClick={processImage}>Process Document</button></div></div>
         )}
       </div>
-
-      {showManualEntry && manualEntryData && (
-        <div className="modal-overlay">
-          <div className="modal-card manual-entry-modal">
-            <div className="modal-header warning-header">✏️ Edit / Complete Information</div>
-            <div className="modal-body">
-              <p className="info-text">Please verify and correct the details below:</p>
-              <div className="manual-entry-form">
-                
-                {/* 1. Transaction Ref */}
-                <div className="form-group">
-                  <label>Transaction Reference {!manualEntryData.transactionRef && <span className="required">*</span>}</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.transactionRef || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, transactionRef: e.target.value})}
-                    placeholder="Enter transaction reference"
-                    className={!manualEntryData.transactionRef ? 'missing-field' : ''}
-                  />
-                  {(manualEntryData.transactionRef || '').replace(/[^0-9]/g, '').length < 15 && (
-                    <span style={{fontSize: '11px', color: '#dc2626'}}>Must be at least 15 digits</span>
-                  )}
-                </div>
-
-                {/* 2. Date (Calendar Format) */}
-                <div className="form-group">
-                  <label>Date {!manualEntryData.date && <span className="required">*</span>}</label>
-                  <input
-                    type="date"
-                    value={manualEntryData.date || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, date: e.target.value})}
-                    className={!manualEntryData.date ? 'missing-field' : ''}
-                  />
-                </div>
-
-                {/* 3. Amount */}
-                <div className="form-group">
-                  <label>Amount (Bill) {!manualEntryData.electricityBill && <span className="required">*</span>}</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.electricityBill || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, electricityBill: e.target.value})}
-                    placeholder="Enter amount"
-                    className={!manualEntryData.electricityBill ? 'missing-field' : ''}
-                  />
-                </div>
-
-                {/* 4. Name */}
-                <div className="form-group">
-                  <label>Customer Name {!manualEntryData.customerName && <span className="required">*</span>}</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.customerName || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, customerName: e.target.value})}
-                    placeholder="Enter customer name"
-                    className={!manualEntryData.customerName ? 'missing-field' : ''}
-                  />
-                </div>
-
-                {/* 5. Account Number */}
-                <div className="form-group">
-                  <label>Account Number {!manualEntryData.accountNumber && <span className="required">*</span>}</label>
-                  <input
-                    type="text"
-                    value={manualEntryData.accountNumber || ''}
-                    onChange={(e) => setManualEntryData({...manualEntryData, accountNumber: e.target.value})}
-                    placeholder="Enter account number"
-                    className={!manualEntryData.accountNumber ? 'missing-field' : ''}
-                  />
-                </div>
-
-              </div>
-            </div>
-            <div className="modal-footer">
-              <button className="btn-secondary" onClick={() => { setShowManualEntry(false); resetCapture(); }}>Cancel</button>
-              <button className="btn-primary" onClick={saveManualEntry}>Continue & Save</button>
-            </div>
-          </div>
-        </div>
+      </>
       )}
 
       {showCropper && capturedImage && (

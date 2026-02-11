@@ -1,3 +1,18 @@
+table {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+tr {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+td, th {
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
 .dashboard-container {
   min-height: 100vh;
   background: #e8e8e8;
@@ -179,6 +194,44 @@
   font-size: 13px;
 }
 
+.pdf-format-submenu {
+  background: #f5f5f5;
+  border-top: 1px solid #e0e0e0;
+  padding: 8px 0;
+}
+
+.pdf-format-label {
+  padding: 8px 20px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.format-option {
+  display: block;
+  width: 100%;
+  padding: 10px 40px;
+  background: none;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+  transition: all 0.2s ease;
+  font-weight: 500;
+}
+
+.format-option:hover {
+  background: #e8f5e9;
+  padding-left: 44px;
+}
+
+.format-option:active {
+  background: #c8e6c9;
+}
+
 .dashboard-main {
   flex: 1;
   padding: 32px;
@@ -209,16 +262,16 @@
 .search-container {
   position: relative;
   width: 100%;
-  max-width: 600px;
+  max-width: 760px;
   margin: 0 auto 20px auto;
 }
 
 .search-input {
   width: 100%;
-  padding: 12px 40px 12px 16px;
+  padding: 10px 36px 10px 14px;
   border: 2px solid #ddd;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: 13px;
   font-family: inherit;
   transition: all 0.3s ease;
   box-sizing: border-box;
@@ -260,6 +313,85 @@
   transform: translateY(-50%) scale(1.1);
 }
 
+.table-controls-row {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  align-items: end;
+}
+
+.table-control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 130px;
+  max-width: 190px;
+  flex: 1 1 150px;
+}
+
+.table-control-group label {
+  font-size: 12px;
+  color: #666;
+  font-weight: 600;
+}
+
+.table-control-select,
+.table-control-input {
+  height: 38px;
+  border: 1px solid #d6d6d6;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  box-sizing: border-box;
+  background: #fff;
+}
+
+.table-control-select:focus,
+.table-control-input:focus {
+  outline: none;
+  border-color: #4caf50;
+  box-shadow: 0 0 0 3px rgba(76, 175, 80, 0.08);
+}
+
+.table-control-actions {
+  flex: 0 0 auto;
+  min-width: auto;
+  max-width: none;
+  justify-content: flex-end;
+}
+
+.table-control-actions label {
+  display: none;
+}
+
+.table-filter-reset-btn {
+  height: 38px;
+  border: 1px solid #e67e22;
+  background: #fff;
+  color: #e67e22;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 12px;
+  transition: all 0.2s ease;
+}
+
+.table-filter-reset-btn:hover {
+  background: #e67e22;
+  color: #fff;
+}
+
+.table-results-summary {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #666;
+  text-align: center;
+}
+
 /* Hide search in PDF exports */
 .no-export {
   display: block;
@@ -271,10 +403,7 @@
   }
 }
 
-/* Also hide when html2pdf is processing */
-.pdf-content-wrapper .no-export {
-  /* Will be hidden by html2pdf's processing */
-}
+/* Also hide when html2pdf is processing - handled by JavaScript */
 
 /* Hide button group on mobile - buttons are in hamburger menu */
 @media (max-width: 480px) {
@@ -286,6 +415,19 @@
     max-width: 100%;
     margin: 0 0 16px 0;
     padding: 0 4px;
+  }
+
+  .table-controls-row {
+    justify-content: stretch;
+    gap: 8px;
+  }
+
+  .table-control-group {
+    max-width: none;
+  }
+
+  .table-control-actions {
+    justify-content: stretch;
   }
 }
 
@@ -577,6 +719,7 @@
 .dashboard-table tbody tr {
   background: transparent;
   transition: background-color 0.2s ease;
+  page-break-inside: avoid;
 }
 
 .dashboard-table tbody tr:nth-child(even) {
@@ -585,6 +728,19 @@
 
 .dashboard-table tbody tr:hover {
   background: transparent;
+}
+
+/* Prevent table from breaking across pages in PDF export */
+.pdf-content-wrapper .dashboard-table {
+  page-break-inside: avoid;
+}
+
+.pdf-content-wrapper .dashboard-table thead {
+  page-break-inside: avoid;
+}
+
+.pdf-content-wrapper .dashboard-table tbody {
+  page-break-inside: avoid;
 }
 
 .table-actions {
