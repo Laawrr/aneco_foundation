@@ -517,44 +517,44 @@ function OCRLanding() {
     }
   };
 
-  const handleSaveClick = () => {
-    if (!editableVerifiedData) return;
+  // const handleSaveClick = () => {
+  //   if (!editableVerifiedData) return;
 
-    const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
-    const required = [
-      { field: 'transactionRef', label: 'Transaction Reference' },
-      { field: 'date', label: 'Date' },
-      { field: 'customerName', label: 'Customer Name' },
-      { field: 'accountNumber', label: 'Account Number' },
-      { field: 'electricityBill', label: 'Amount (Bill)' }
-    ];
+  //   const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
+  //   const required = [
+  //     { field: 'transactionRef', label: 'Transaction Reference' },
+  //     { field: 'date', label: 'Date' },
+  //     { field: 'customerName', label: 'Customer Name' },
+  //     { field: 'accountNumber', label: 'Account Number' },
+  //     { field: 'electricityBill', label: 'Amount (Bill)' }
+  //   ];
 
-    for (const item of required) {
-      if (!editableVerifiedData[item.field] || editableVerifiedData[item.field].toString().trim() === '') {
-        showToast(`❌ ${item.label} is required`);
-        return;
-      }
-    }
+  //   for (const item of required) {
+  //     if (!editableVerifiedData[item.field] || editableVerifiedData[item.field].toString().trim() === '') {
+  //       showToast(`❌ ${item.label} is required`);
+  //       return;
+  //     }
+  //   }
 
-    if (countDigits(editableVerifiedData.transactionRef) < 15) {
-      showToast('❌ Transaction reference must have at least 15 digits');
-      return;
-    }
+  //   if (countDigits(editableVerifiedData.transactionRef) < 15) {
+  //     showToast('❌ Transaction reference must have at least 15 digits');
+  //     return;
+  //   }
 
-    if (!isFebruary2026(editableVerifiedData.date)) {
-      showToast('❌ Only dates within February 2026 are allowed');
-      return;
-    }
+  //   if (!isFebruary2026(editableVerifiedData.date)) {
+  //     showToast('❌ Only dates within February 2026 are allowed');
+  //     return;
+  //   }
 
-    const amountValue = parseFloat(String(editableVerifiedData.electricityBill).replace(/,/g, '').trim());
-    if (isNaN(amountValue) || amountValue < 10) {
-      showToast('❌ Bill amount seems invalid');
-      return;
-    }
+  //   const amountValue = parseFloat(String(editableVerifiedData.electricityBill).replace(/,/g, '').trim());
+  //   if (isNaN(amountValue) || amountValue < 10) {
+  //     showToast('❌ Bill amount seems invalid');
+  //     return;
+  //   }
 
-    // Show signature pad instead of directly saving
-    setShowSignaturePad(true);
-  };
+  //   // Show signature pad instead of directly saving
+  //   setShowSignaturePad(true);
+  // };
 
   const handleSignatureConfirm = (signature) => {
     // Set signature and show a confirmation modal — do NOT save immediately
@@ -569,6 +569,47 @@ function OCRLanding() {
 
   const saveToDatabase = async (signature = null) => {
     if (!editableVerifiedData) return;
+
+    // Validate all required fields before saving
+    const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
+    const required = [
+      { field: 'transactionRef', label: 'Transaction Reference' },
+      { field: 'date', label: 'Date' },
+      { field: 'customerName', label: 'Customer Name' },
+      { field: 'accountNumber', label: 'Account Number' },
+      { field: 'electricityBill', label: 'Amount (Bill)' }
+    ];
+
+    // Check all required fields are filled
+    for (const item of required) {
+      if (!editableVerifiedData[item.field] || editableVerifiedData[item.field].toString().trim() === '') {
+        showToast(`❌ ${item.label} is required`);
+        setStatus('Ready');
+        return;
+      }
+    }
+
+    // Validate transaction reference has at least 15 digits
+    if (countDigits(editableVerifiedData.transactionRef) < 15) {
+      showToast('❌ Transaction reference must have at least 15 digits');
+      setStatus('Ready');
+      return;
+    }
+
+    // Validate date is within February 2026
+    if (!isFebruary2026(editableVerifiedData.date)) {
+      showToast('❌ Only dates within February 2026 are allowed');
+      setStatus('Ready');
+      return;
+    }
+
+    // Validate amount is valid (must be at least 50)
+    const amountValue = parseFloat(String(editableVerifiedData.electricityBill).replace(/,/g, '').trim());
+    if (isNaN(amountValue) || amountValue < 50) {
+      showToast('❌ Bill amount must be at least 50');
+      setStatus('Ready');
+      return;
+    }
 
     setStatus('Saving...');
     try {
@@ -911,18 +952,16 @@ function OCRLanding() {
             </div>
 
             <div className="modal-footer">
-              <div className="action-row-top">
-                <div className="action-buttons">
-                  {!signatureData ? (
-                    <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Add Signature</button>
-                  ) : (
-                    <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Edit Signature</button>
-                  )}
-                  <button className="btn-primary" onClick={() => saveToDatabase(null)} disabled={!signatureData}>Save</button>
-                </div>
-              </div>
-              <div className="action-row-bottom">
+              <div className="modal-footer-actions">
                 <button className="btn-secondary btn-cancel" onClick={resetCapture}>Cancel</button>
+                {!signatureData ? (
+                  <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Add Signature</button>
+                ) : (
+                  <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Edit Signature</button>
+                )}
+              </div>
+              <div className="modal-footer-save">
+                <button className="btn-primary" onClick={() => saveToDatabase(null)} disabled={!signatureData}>Save</button>
               </div>
             </div>
           </div>
@@ -992,7 +1031,7 @@ function OCRLanding() {
       {showSignatureConfirm && (
         <div className="modal-overlay">
           <div className="modal-card">
-            <div className="modal-header">✔️ Signature Captured</div>
+            <div className="modal-header">✅ Signature Captured</div>
             <div className="modal-body" style={{ textAlign: 'center' }}>
               <p>Your signature has been captured. Return to the verify screen to save.</p>
               {signatureData && <img src={signatureData} alt="signature preview" style={{ maxWidth: '100%', maxHeight: 120, border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6 }} />}
