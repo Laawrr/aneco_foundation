@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './OCRLanding.css';
 import { createWorker, PSM } from 'tesseract.js'; // Imported PSM
+import { useNavigate } from 'react-router-dom';
 import SignaturePad from './components/SignaturePad';
 import ImageCropper from './components/ImageCropper'; 
 
@@ -163,6 +164,7 @@ const rotateCanvas = (canvas, degrees) => {
 };
 
 function OCRLanding() {
+  const navigate = useNavigate();
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -196,6 +198,100 @@ function OCRLanding() {
   const workerRef = useRef(null);
   const savedModalTimerRef = useRef(null);
   const hasScannerIdentity = Boolean(scannerName.trim());
+  const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
+
+  const routeToError = (title, message, details = []) => {
+    navigate('/error', {
+      state: {
+        title,
+        message,
+        details: Array.isArray(details) ? details : [details].filter(Boolean),
+      },
+    });
+  };
+
+  const normalizeAccountNumber = (value) =>
+    String(value || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s+/g, '');
+
+  const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
+
+  const validateVerifiedData = (data) => {
+    if (!data) {
+      return ['Document verification data is missing'];
+    }
+
+    const errors = [];
+    const required = [
+      { field: 'transactionRef', label: 'Transaction Reference' },
+      { field: 'date', label: 'Date' },
+      { field: 'customerName', label: 'Customer Name' },
+      { field: 'accountNumber', label: 'Account Number' },
+      { field: 'electricityBill', label: 'Amount (Bill)' }
+    ];
+
+    for (const item of required) {
+      if (!data[item.field] || data[item.field].toString().trim() === '') {
+        errors.push(`${item.label} is required`);
+      }
+    }
+
+    if (data.transactionRef && countDigits(data.transactionRef) < 15) {
+      errors.push('Transaction reference must have at least 15 digits');
+    }
+
+    const normalizedAccount = normalizeAccountNumber(data.accountNumber);
+    if (normalizedAccount && !/^B\d{6,}$/.test(normalizedAccount)) {
+      errors.push('Account number must start with B and contain digits only');
+    }
+
+    const customerName = String(data.customerName || '').trim();
+    if (customerName && !/^[A-Za-z][A-Za-z\s,\-./']*$/.test(customerName)) {
+      errors.push('Customer Name must contain valid text only');
+    }
+
+    if (!isFebruary2026(data.date)) {
+      errors.push('Only dates within February 2026 are allowed');
+    }
+
+    const amountValue = parseFloat(String(data.electricityBill || '').replace(/,/g, '').trim());
+    if (isNaN(amountValue) || amountValue < 50) {
+      errors.push('Bill amount must be at least 50');
+    }
+
+    return errors;
+  };
+
+  const requireValidVerifiedData = (actionLabel, options = {}) => {
+    const { inline = false } = options;
+    const fieldErrors = validateVerifiedData(editableVerifiedData);
+    if (fieldErrors.length > 0) {
+      if (inline) {
+        showToast(`❌ ${fieldErrors[0]}`);
+        return false;
+      }
+      routeToError(
+        'Validation Failed',
+        `Please complete and correct all Document Verify fields before ${actionLabel}.`,
+        fieldErrors
+      );
+      return false;
+    }
+    return true;
+  };
+
+  const checkAccountDuplicate = async (accountNumber) => {
+    const normalizedAccount = normalizeAccountNumber(accountNumber);
+    if (!normalizedAccount) return false;
+    const checkRes = await fetch(`${API_BASE}/api/check-account/${encodeURIComponent(normalizedAccount)}`);
+    if (!checkRes.ok) {
+      throw new Error(`Account duplicate check failed (${checkRes.status})`);
+    }
+    const checkData = await checkRes.json();
+    return Boolean(checkData.exists);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -416,7 +512,7 @@ function OCRLanding() {
     }
   };
 
-  const rotateLiveView = () => setRotateView(prev => (prev + 90) % 360);
+  const rotateLiveView = () => setRotateView(prev => (prev - 90 + 360) % 360);
   const toggleCamera = () => {
     setFacingMode(prev => prev === 'environment' ? 'user' : 'environment');
   };
@@ -441,7 +537,7 @@ function OCRLanding() {
       tmp.height = img.height;
       const ctx = tmp.getContext('2d');
       ctx.drawImage(img, 0, 0);
-      const rotated = rotateCanvas(tmp, 90);
+      const rotated = rotateCanvas(tmp, -90);
       setCapturedImage(rotated.toDataURL('image/jpeg', 0.9));
     };
     img.src = capturedImage;
@@ -505,6 +601,22 @@ function OCRLanding() {
             showToast(`⚠️ Review required: missing ${missingFields.join(', ')}`);
           }
 
+          const accountNumber = parsed.accountNumber || '';
+          if (accountNumber) {
+            const isDuplicate = await checkAccountDuplicate(accountNumber);
+            if (isDuplicate) {
+              setMode('preview');
+              setStatus('Ready');
+              setProgress(100);
+              routeToError(
+                'Duplicate Account Number',
+                `Account number ${normalizeAccountNumber(accountNumber)} is already in the database.`,
+                ['Do not proceed with Document Verified for duplicate accounts.', 'Please scan a different document.']
+              );
+              return;
+            }
+          }
+
           setModalType('success');
 
           setMode('preview');
@@ -512,18 +624,16 @@ function OCRLanding() {
           setProgress(100);
         } catch (err) {
           console.error(err);
-          setModalType('error');
-          setErrorMessage('Processing failed internally');
           setMode('preview');
           setStatus('Ready');
+          routeToError('Processing Failed', 'Document processing failed internally.', String(err));
         }
       };
       img.src = capturedImage;
     } catch (err) {
-      setModalType('error');
-      setErrorMessage(`Error: ${String(err)}`);
       setMode('preview');
       setStatus('Ready');
+      routeToError('Processing Failed', 'Unable to process the captured image.', String(err));
     }
   };
 
@@ -537,66 +647,38 @@ function OCRLanding() {
     setShowSignaturePad(false);
   };
 
+  const handleOpenSignaturePad = () => {
+    if (!requireValidVerifiedData('adding a signature')) {
+      return;
+    }
+    setShowSignaturePad(true);
+  };
+
   const saveToDatabase = async (signature = null) => {
     if (!editableVerifiedData) return;
 
-    // Validate all required fields before saving
-    const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
-    const required = [
-      { field: 'transactionRef', label: 'Transaction Reference' },
-      { field: 'date', label: 'Date' },
-      { field: 'customerName', label: 'Customer Name' },
-      { field: 'accountNumber', label: 'Account Number' },
-      { field: 'electricityBill', label: 'Amount (Bill)' }
-    ];
-
-    // Check all required fields are filled
-    for (const item of required) {
-      if (!editableVerifiedData[item.field] || editableVerifiedData[item.field].toString().trim() === '') {
-        showToast(`❌ ${item.label} is required`);
-        setStatus('Ready');
-        return;
-      }
-    }
-
-    // Validate transaction reference has at least 15 digits
-    if (countDigits(editableVerifiedData.transactionRef) < 15) {
-      showToast('❌ Transaction reference must have at least 15 digits');
-      setStatus('Ready');
-      return;
-    }
-
-    // Validate date is within February 2026
-    if (!isFebruary2026(editableVerifiedData.date)) {
-      showToast('❌ Only dates within February 2026 are allowed');
-      setStatus('Ready');
-      return;
-    }
-
-    // Validate amount is valid (must be at least 50)
-    const amountValue = parseFloat(String(editableVerifiedData.electricityBill).replace(/,/g, '').trim());
-    if (isNaN(amountValue) || amountValue < 50) {
-      showToast('❌ Bill amount must be at least 50');
+    if (!requireValidVerifiedData('saving', { inline: true })) {
       setStatus('Ready');
       return;
     }
 
     setStatus('Saving...');
     try {
-      const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
-
       try {
-        const checkRes = await fetch(`${API_BASE}/api/check-transaction/${editableVerifiedData.transactionRef}`);
-        if (checkRes.ok) {
-          const checkData = await checkRes.json();
-          if (checkData.exists) {
-            showToast('❌ Transaction reference already exists in database');
-            setStatus('Ready');
-            return;
-          }
+        const isDuplicate = await checkAccountDuplicate(editableVerifiedData.accountNumber);
+        if (isDuplicate) {
+          setStatus('Ready');
+          routeToError(
+            'Duplicate Account Number',
+            `Account number ${normalizeAccountNumber(editableVerifiedData.accountNumber)} already exists in the database.`,
+            ['Save was stopped to prevent duplicate account records.']
+          );
+          return;
         }
       } catch (err) {
-        console.warn('Duplicate check skipped:', err);
+        setStatus('Ready');
+        routeToError('Validation Service Error', 'Unable to verify account number uniqueness.', String(err));
+        return;
       }
 
       const dataToSave = {
@@ -604,7 +686,7 @@ function OCRLanding() {
         date: editableVerifiedData.date,
         electricityBill: String(editableVerifiedData.electricityBill).replace(/,/g, '').trim(),
         customerName: editableVerifiedData.customerName.trim(),
-        accountNumber: editableVerifiedData.accountNumber.trim(),
+        accountNumber: normalizeAccountNumber(editableVerifiedData.accountNumber),
         scannerName: scannerName.trim(),
         signature: signature || signatureData || null
       };
@@ -627,12 +709,13 @@ function OCRLanding() {
         setSignatureData(null);
         resetCapture();
       } else {
-        const text = await res.text().catch(() => '');
-        console.error('[api] save-ocr-data failed', res.status, text);
-        showToast(`❌ Failed to save: ${res.status}`);
+        const body = await res.json().catch(() => null);
+        const details = body && Array.isArray(body.details) ? body.details : [];
+        const errorText = body && body.error ? body.error : `Failed to save (status ${res.status})`;
+        routeToError('Save Failed', errorText, details);
       }
     } catch (err) {
-      showToast('❌ Network error');
+      routeToError('Network Error', 'Unable to reach the server while saving.', String(err));
     }
     setStatus('Ready');
   };
@@ -918,9 +1001,9 @@ function OCRLanding() {
               <div className="modal-footer-actions">
                 <button className="btn-secondary btn-cancel" onClick={resetCapture}>Cancel</button>
                 {!signatureData ? (
-                  <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Add Signature</button>
+                  <button className="btn-secondary" onClick={handleOpenSignaturePad}>Add Signature</button>
                 ) : (
-                  <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Edit Signature</button>
+                  <button className="btn-secondary" onClick={handleOpenSignaturePad}>Edit Signature</button>
                 )}
               </div>
               <div className="modal-footer-save">
