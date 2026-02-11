@@ -30,6 +30,7 @@ export default function Dashboard() {
   const exportMenuRef = useRef(null);
   const mobileMenuRef = useRef(null);
   const pdfRef = useRef(null);
+  const tempRowKeyCounterRef = useRef(0);
 
   const clearAdminAuth = () => {
     localStorage.removeItem(ADMIN_AUTH_KEY);
@@ -119,6 +120,7 @@ export default function Dashboard() {
 
       const mapped = rows.map((row) => ({
         id: row.id,
+        localKey: row.id ? `id-${row.id}` : `tmp-${Date.now()}-${tempRowKeyCounterRef.current++}`,
         accountNumber: row.accountNumber || '',
         accountName: row.customerName || '',
         scannerName: row.scannerName || '',
@@ -196,6 +198,9 @@ export default function Dashboard() {
       const newData = [...prev];
       // Find the original index of the row
       const originalIndex = newData.findIndex((row) => {
+        if (rowToUpdate.localKey && row.localKey) {
+          return row.localKey === rowToUpdate.localKey;
+        }
         // Match by id if available, otherwise match by all fields
         if (rowToUpdate.id && row.id) {
           return row.id === rowToUpdate.id;
@@ -292,10 +297,19 @@ export default function Dashboard() {
     setIsEditMode(false);
   };
 
-    const addRow = () => {
+  const addRow = () => {
     setTableData((prev) => [
       ...prev,
-      { id: null, accountNumber: '', accountName: '', scannerName: '', referenceNo: '', amount: '', signatureName: '' },
+      {
+        id: null,
+        localKey: `tmp-${Date.now()}-${tempRowKeyCounterRef.current++}`,
+        accountNumber: '',
+        accountName: '',
+        scannerName: '',
+        referenceNo: '',
+        amount: '',
+        signatureName: '',
+      },
     ]);
   };
 
@@ -303,6 +317,9 @@ export default function Dashboard() {
     setTableData((prev) => {
       // Find the original index of the row
       const originalIndex = prev.findIndex((row) => {
+        if (rowToDelete.localKey && row.localKey) {
+          return row.localKey === rowToDelete.localKey;
+        }
         // Match by id if available, otherwise match by all fields
         if (rowToDelete.id && row.id) {
           return row.id === rowToDelete.id;
@@ -312,7 +329,8 @@ export default function Dashboard() {
           row.accountName === rowToDelete.accountName &&
           row.scannerName === rowToDelete.scannerName &&
           row.referenceNo === rowToDelete.referenceNo &&
-          row.amount === rowToDelete.amount
+          row.amount === rowToDelete.amount &&
+          row.signatureName === rowToDelete.signatureName
         );
       });
       
@@ -1146,7 +1164,7 @@ export default function Dashboard() {
                     </tr>
                   ) : (
                     displayTableData.map((row, index) => (
-                      <tr key={index}>
+                      <tr key={row.localKey || row.id || `${row.accountNumber}-${row.referenceNo}-${index}`}>
                         <td>
                           {index + 1}
                         </td>
@@ -1258,7 +1276,7 @@ export default function Dashboard() {
                 </div>
               ) : (
                 displayTableData.map((row, index) => (
-                <div key={index} className="mobile-card">
+                <div key={row.localKey || row.id || `${row.accountNumber}-${row.referenceNo}-${index}`} className="mobile-card">
                   <div className="mobile-card-header">
                     <span className="mobile-card-number">#{index + 1}</span>
                     {isEditMode && (
