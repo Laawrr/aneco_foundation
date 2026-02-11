@@ -6,6 +6,8 @@ import SignaturePad from './components/SignaturePad';
 import ImageCropper from './components/ImageCropper'; 
 
 const SCANNER_NAME_STORAGE_KEY = 'anecoScannerName';
+const TESSERACT_ASSET_BASE = `${process.env.PUBLIC_URL || ''}/tesseract`;
+const TESSERACT_LANG_BASE = `${TESSERACT_ASSET_BASE}/lang-data`;
 
 // HELPER: Convert "O" to "0", "l" to "1", etc. for numeric fields
 const cleanOCRNumber = (str) => {
@@ -179,6 +181,7 @@ function OCRLanding() {
   const [showSignaturePad, setShowSignaturePad] = useState(false);
   const [signatureData, setSignatureData] = useState(null);
   const [showSignatureConfirm, setShowSignatureConfirm] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const workerRef = useRef(null);
   const savedModalTimerRef = useRef(null);
   const hasScannerIdentity = Boolean(scannerName.trim());
@@ -199,6 +202,11 @@ function OCRLanding() {
       .trim()
       .toUpperCase()
       .replace(/\s+/g, '');
+
+  const normalizeTransactionRef = (value) =>
+    String(value || '')
+      .replace(/[^\d]/g, '')
+      .trim();
 
   const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
 
@@ -225,8 +233,9 @@ function OCRLanding() {
     }
 
     const normalizedAccount = normalizeAccountNumber(data.accountNumber);
-    if (normalizedAccount && !/^B\d{6,}$/.test(normalizedAccount)) {
-      errors.push('Account number must start with B and contain digits only');
+    const accountDigits = normalizedAccount.replace(/^B/, '');
+    if (normalizedAccount && !/^\d{6,}$/.test(accountDigits)) {
+      errors.push('Account number must contain at least 6 digits');
     }
 
     const customerName = String(data.customerName || '').trim();
@@ -267,12 +276,26 @@ function OCRLanding() {
     return Boolean(checkData.exists);
   };
 
+  const checkTransactionDuplicate = async (transactionRef) => {
+    const normalizedRef = normalizeTransactionRef(transactionRef);
+    if (!normalizedRef) return false;
+    const checkRes = await fetch(`${API_BASE}/api/check-transaction/${encodeURIComponent(normalizedRef)}`);
+    if (!checkRes.ok) {
+      throw new Error(`Transaction duplicate check failed (${checkRes.status})`);
+    }
+    const checkData = await checkRes.json();
+    return Boolean(checkData.exists);
+  };
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       try {
         setStatus('Loading OCR worker...');
         const worker = await createWorker({
+          workerPath: `${TESSERACT_ASSET_BASE}/worker.min.js`,
+          corePath: TESSERACT_ASSET_BASE,
+          langPath: TESSERACT_LANG_BASE,
           logger: m => {
             if (!mounted) return;
             if (m.status === 'recognizing text' && typeof m.progress === 'number') {
@@ -295,7 +318,11 @@ function OCRLanding() {
         workerRef.current = worker;
         setStatus('Ready');
       } catch (err) {
-        if (mounted) setStatus('OCR Error');
+        console.error('Failed to initialize OCR worker', err);
+        if (mounted) {
+          const message = err && err.message ? err.message : 'Unknown error';
+          setStatus(`OCR Error: ${message}`);
+        }
       }
     })();
     return () => {
@@ -517,8 +544,13 @@ function OCRLanding() {
   };
 
   const processImage = async () => {
-    if (!capturedImage || !workerRef.current) {
+    if (!capturedImage) {
       showToast('❌ No image to process');
+      return;
+    }
+    if (!workerRef.current) {
+      showToast('⏳ OCR is still loading. Please wait a moment and try again.');
+      setStatus('Loading OCR worker...');
       return;
     }
 
@@ -577,6 +609,21 @@ function OCRLanding() {
           }
 
           const accountNumber = parsed.accountNumber || '';
+          const transactionRef = parsed.transactionRef || '';
+          if (transactionRef) {
+            const isDuplicateTransaction = await checkTransactionDuplicate(transactionRef);
+            if (isDuplicateTransaction) {
+              setMode('preview');
+              setStatus('Ready');
+              setProgress(100);
+              routeToError(
+                'Duplicate Transaction Reference',
+                `Transaction reference ${normalizeTransactionRef(transactionRef)} is already in the database.`,
+                ['Do not proceed with duplicate transaction references.', 'Please scan a different document.']
+              );
+              return;
+            }
+          }
           if (accountNumber) {
             const isDuplicate = await checkAccountDuplicate(accountNumber);
             if (isDuplicate) {
@@ -631,15 +678,33 @@ function OCRLanding() {
   };
 
   const saveToDatabase = async (signature = null) => {
-    if (!editableVerifiedData) return;
+    if (!editableVerifiedData || isSaving) return;
 
     if (!requireValidVerifiedData('saving', { inline: true })) {
       setStatus('Ready');
       return;
     }
 
+    setIsSaving(true);
     setStatus('Saving...');
     try {
+      try {
+        const isDuplicateTransaction = await checkTransactionDuplicate(editableVerifiedData.transactionRef);
+        if (isDuplicateTransaction) {
+          setStatus('Ready');
+          routeToError(
+            'Duplicate Transaction Reference',
+            `Transaction reference ${normalizeTransactionRef(editableVerifiedData.transactionRef)} already exists in the database.`,
+            ['Save was stopped to prevent duplicate transaction references.']
+          );
+          return;
+        }
+      } catch (err) {
+        setStatus('Ready');
+        routeToError('Validation Service Error', 'Unable to verify transaction reference uniqueness.', String(err));
+        return;
+      }
+
       try {
         const isDuplicate = await checkAccountDuplicate(editableVerifiedData.accountNumber);
         if (isDuplicate) {
@@ -692,8 +757,10 @@ function OCRLanding() {
       }
     } catch (err) {
       routeToError('Network Error', 'Unable to reach the server while saving.', String(err));
+    } finally {
+      setIsSaving(false);
+      setStatus('Ready');
     }
-    setStatus('Ready');
   };
 
   const resetCapture = () => {
@@ -983,7 +1050,7 @@ function OCRLanding() {
                 )}
               </div>
               <div className="modal-footer-save">
-                <button className="btn-primary" onClick={() => saveToDatabase(null)} disabled={!signatureData}>Save</button>
+                <button className="btn-primary" onClick={() => saveToDatabase(null)} disabled={!signatureData || isSaving}>{isSaving ? 'Saving...' : 'Save'}</button>
               </div>
             </div>
           </div>
@@ -1021,7 +1088,7 @@ function OCRLanding() {
           </div>
         )}
         {mode === 'preview' && (
-          <div className="preview-actions"><div className="preview-buttons"><button className="btn-secondary" onClick={resetCapture}>Retake</button><button className="btn-secondary" onClick={handleCropImage}>Crop</button><button className="btn-primary" onClick={processImage}>Process Document</button></div></div>
+          <div className="preview-actions"><div className="preview-buttons"><button className="btn-secondary" onClick={resetCapture}>Retake</button><button className="btn-secondary" onClick={handleCropImage}>Crop</button><button className="btn-primary" onClick={processImage} disabled={!capturedImage || !workerRef.current}>Process Document</button></div></div>
         )}
       </div>
       </>
