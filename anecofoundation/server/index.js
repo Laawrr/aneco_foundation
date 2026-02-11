@@ -26,6 +26,8 @@ console.log('[server] signatureDir=', signatureDir);
 
 // Admin access code (from ENV or default)
 const ADMIN_CODE = process.env.ADMIN_CODE || 'ANEC0491977';
+// Changes on each server boot so frontend sessions are invalidated after restart.
+const SERVER_SESSION_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
 let worker;
 
@@ -130,6 +132,30 @@ app.post('/api/test-signature-write', async (req, res) => {
   }
 });
 
+// Endpoint to serve signature images
+app.get('/api/signature/:filename', async (req, res) => {
+  const { filename } = req.params;
+  // Security: prevent directory traversal
+  if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+    return res.status(400).json({ ok: false, error: 'Invalid filename' });
+  }
+  
+  const filePath = path.join(signatureDir, filename);
+  
+  try {
+    // Check if file exists
+    await fs.promises.access(filePath, fs.constants.F_OK);
+    // Set appropriate content type for PNG images
+    res.setHeader('Content-Type', 'image/png');
+    // Stream the file
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (err) {
+    console.error('[api] Error serving signature:', err);
+    res.status(404).json({ ok: false, error: 'Signature not found' });
+  }
+});
+
 // Simple login endpoint that validates the admin code
 app.post('/api/login', (req, res) => {
   const { code } = req.body || {};
@@ -139,10 +165,15 @@ app.post('/api/login', (req, res) => {
   }
 
   if (code === ADMIN_CODE) {
-    return res.json({ ok: true });
+    return res.json({ ok: true, sessionId: SERVER_SESSION_ID });
   }
 
   return res.status(401).json({ ok: false, error: 'Invalid code' });
+});
+
+// Expose the current server session id for client-side session validation.
+app.get('/api/session-status', (req, res) => {
+  return res.json({ ok: true, sessionId: SERVER_SESSION_ID });
 });
 
 app.post('/ocr', upload.single('image'), async (req, res) => {

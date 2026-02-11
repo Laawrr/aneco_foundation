@@ -3,23 +3,56 @@ import { Link, useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import './Admin.css';
 
+const ADMIN_AUTH_KEY = 'adminAuthed';
+const ADMIN_SESSION_KEY = 'adminSessionId';
+
 export default function Admin() {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
+  const clearAdminAuth = () => {
+    localStorage.removeItem(ADMIN_AUTH_KEY);
+    localStorage.removeItem(ADMIN_SESSION_KEY);
+  };
+
   // Redirect authenticated users away from login page
   useEffect(() => {
-    const authed = localStorage.getItem('adminAuthed') === 'true';
-    if (authed) {
-      // User is already authenticated, redirect to dashboard
-      navigate('/dashboard', { replace: true });
-      return;
-    }
-    // Only clear authentication if user is not authenticated
-    // This allows users to access the login page when not logged in
-    localStorage.removeItem('adminAuthed');
+    let active = true;
+
+    const validateExistingSession = async () => {
+      const authed = localStorage.getItem(ADMIN_AUTH_KEY) === 'true';
+      const storedSessionId = localStorage.getItem(ADMIN_SESSION_KEY);
+
+      if (!authed || !storedSessionId) {
+        clearAdminAuth();
+        return;
+      }
+
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/session-status`);
+        const data = await res.json().catch(() => ({}));
+
+        if (!active) return;
+
+        if (res.ok && data.ok && data.sessionId && data.sessionId === storedSessionId) {
+          navigate('/dashboard', { replace: true });
+          return;
+        }
+
+        clearAdminAuth();
+      } catch (err) {
+        // If server is unavailable or restarted, force fresh login.
+        clearAdminAuth();
+      }
+    };
+
+    validateExistingSession();
+
+    return () => {
+      active = false;
+    };
   }, [navigate]);
 
   const handleSubmit = async (e) => {
@@ -46,18 +79,26 @@ export default function Admin() {
         setError(data.error || 'Invalid code');
         setCode('');
         // Clear any auth data on failed login attempt for security
-        localStorage.removeItem('adminAuthed');
+        clearAdminAuth();
+        return;
+      }
+
+      if (!data.sessionId) {
+        setError('Login failed. Please try again.');
+        setCode('');
+        clearAdminAuth();
         return;
       }
 
       // Mark user as authenticated for this session
-      localStorage.setItem('adminAuthed', 'true');
+      localStorage.setItem(ADMIN_AUTH_KEY, 'true');
+      localStorage.setItem(ADMIN_SESSION_KEY, data.sessionId);
       navigate('/dashboard');
     } catch (err) {
       console.error('Login error:', err);
       setError('Unable to login. Please try again.');
       // Clear any auth data on network/connection error for security
-      localStorage.removeItem('adminAuthed');
+      clearAdminAuth();
     } finally {
       setLoading(false);
     }
