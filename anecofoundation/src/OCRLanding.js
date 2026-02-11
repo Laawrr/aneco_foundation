@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './OCRLanding.css';
 import { createWorker } from 'tesseract.js';
-import ImageCropper from './components/ImageCropper';
 import SignaturePad from './components/SignaturePad';
+import ImageCropper from './components/ImageCropper'; 
 
 const SCANNER_NAME_STORAGE_KEY = 'anecoScannerName';
 
@@ -121,9 +121,7 @@ const parseOCRText = (text) => {
   }
 
   // 3. Date
-  const dateMatch = text.match(
-    /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i
-  );
+  const dateMatch = text.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i);
   if (dateMatch) {
     data.date = `${dateMatch[1]} ${dateMatch[2]}, ${dateMatch[3]}`;
   } else {
@@ -197,7 +195,9 @@ function OCRLanding() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showSignaturePad, setShowSignaturePad] = useState(false);
   const [signatureData, setSignatureData] = useState(null);
+  const [showSignatureConfirm, setShowSignatureConfirm] = useState(false);
   const workerRef = useRef(null);
+  const savedModalTimerRef = useRef(null);
   const hasScannerIdentity = Boolean(scannerName.trim());
 
   useEffect(() => {
@@ -264,6 +264,15 @@ function OCRLanding() {
 
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showUserMenu]);
+
+  // Clean up any timers used for auto-dismissing the saved modal
+  useEffect(() => {
+    return () => {
+      if (savedModalTimerRef.current) {
+        clearTimeout(savedModalTimerRef.current);
+      }
+    };
+  }, []);
 
   const startCamera = async () => {
     try {
@@ -547,10 +556,11 @@ function OCRLanding() {
     setShowSignaturePad(true);
   };
 
-  const handleSignatureConfirm = async (signature) => {
+  const handleSignatureConfirm = (signature) => {
+    // Set signature and show a confirmation modal — do NOT save immediately
     setSignatureData(signature);
     setShowSignaturePad(false);
-    await saveToDatabase(signature);
+    setShowSignatureConfirm(true);
   };
 
   const handleSignatureCancel = () => {
@@ -594,12 +604,20 @@ function OCRLanding() {
         body: JSON.stringify(dataToSave)
       });
       if (res.ok) {
-        showToast('✅ Saved successfully');
+        const body = await res.json().catch(() => ({}));
+        if (body.signaturePath) {
+          console.log('[ocr] signature saved at', body.signaturePath);
+          showToast(`✅ Saved successfully! Signature: ${body.signature || 'saved'}`);
+        } else {
+          showToast('✅ Saved successfully');
+        }
         setModalType(null);
         setEditableVerifiedData(null);
         setSignatureData(null);
         resetCapture();
       } else {
+        const text = await res.text().catch(() => '');
+        console.error('[api] save-ocr-data failed', res.status, text);
         showToast(`❌ Failed to save: ${res.status}`);
       }
     } catch (err) {
@@ -772,12 +790,12 @@ function OCRLanding() {
               />
               {/* DOCUMENT OVERLAY: Lighter style */}
               <div className="document-overlay" style={{ background: 'rgba(255,255,255,0.1)' }}>
-                 {/* Explicitly override the dark pseudo-element mask from CSS */}
+                 {/* Keep overlay neutral so preview matches capture */}
                 <style>{`
-                  .document-overlay::after { background: radial-gradient(ellipse at center, transparent 0%, rgba(255, 255, 255, 0.5) 100%) !important; }
-                  .instruction-text { background: rgba(255, 255, 255, 0.8) !important; color: #333 !important; border: 1px solid #ccc !important; }
-                  .hint-text { background: rgba(255, 255, 255, 0.6) !important; color: #555 !important; }
-                  .document-frame { border-color: #ffffff !important; background: rgba(37, 99, 235, 0.05) !important; box-shadow: 0 0 0 1000px rgba(255,255,255,0.6) !important; }
+                  .document-overlay::after { background: none !important; }
+                  .instruction-text { background: rgba(255, 255, 255, 0.95) !important; color: #111 !important; border: 1px solid rgba(0,0,0,0.06) !important; }
+                  .hint-text { background: rgba(255, 255, 255, 0.8) !important; color: #333 !important; }
+                  .document-frame { border-color: rgba(37, 99, 235, 0.9) !important; background: rgba(37, 99, 235, 0.03) !important; box-shadow: none !important; }
                 `}</style>
                 <div ref={guideFrameRef} className="document-frame">
                   <div className="corner corner-tl" style={{ borderColor: '#2563eb' }}></div>
@@ -815,6 +833,31 @@ function OCRLanding() {
             <div className="modal-header success-header">✅ Document Verified</div>
             <div className="modal-body">
               <div className="data-grid">
+                <div className="data-row-two-col">
+                  <div className="data-item">
+                    <span className="label">Date:</span>
+                    <input
+                      type="date"
+                      className="value"
+                      value={editableVerifiedData.date || ''}
+                      onChange={(e) => handleVerifiedFieldChange('date', e.target.value)}
+                    />
+                  </div>
+                  <div className="data-item">
+                    <span className="label">Amount:</span>
+                    <textarea
+                      className="value"
+                      value={editableVerifiedData.electricityBill || ''}
+                      rows={1}
+                      onChange={(e) => {
+                        handleVerifiedFieldChange('electricityBill', e.target.value);
+                        autoResizeTextarea(e);
+                      }}
+                      onInput={autoResizeTextarea}
+                      placeholder="Enter bill amount"
+                    />
+                  </div>
+                </div>
                 <div className="data-item">
                   <span className="label">Ref:</span>
                   <textarea
@@ -827,29 +870,6 @@ function OCRLanding() {
                     }}
                     onInput={autoResizeTextarea}
                     placeholder="Enter transaction reference"
-                  />
-                </div>
-                <div className="data-item">
-                  <span className="label">Date:</span>
-                  <input
-                    type="date"
-                    className="value"
-                    value={editableVerifiedData.date || ''}
-                    onChange={(e) => handleVerifiedFieldChange('date', e.target.value)}
-                  />
-                </div>
-                <div className="data-item">
-                  <span className="label">Amount:</span>
-                  <textarea
-                    className="value"
-                    value={editableVerifiedData.electricityBill || ''}
-                    rows={1}
-                    onChange={(e) => {
-                      handleVerifiedFieldChange('electricityBill', e.target.value);
-                      autoResizeTextarea(e);
-                    }}
-                    onInput={autoResizeTextarea}
-                    placeholder="Enter bill amount"
                   />
                 </div>
                 <div className="data-item">
@@ -881,14 +901,35 @@ function OCRLanding() {
                   />
                 </div>
               </div>
+
+              {signatureData && (
+                <div className="signature-preview-section">
+                  <div className="signature-preview-label">Signature:</div>
+                  <img src={signatureData} alt="signature" className="signature-preview-img" />
+                </div>
+              )}
             </div>
+
             <div className="modal-footer">
-              <button className="btn-secondary" onClick={resetCapture}>Cancel</button>
-              <button className="btn-primary" onClick={handleSaveClick}>Save ✓</button>
+              <div className="action-row-top">
+                <div className="action-buttons">
+                  {!signatureData ? (
+                    <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Add Signature</button>
+                  ) : (
+                    <button className="btn-secondary" onClick={() => setShowSignaturePad(true)}>Edit Signature</button>
+                  )}
+                  <button className="btn-primary" onClick={() => saveToDatabase(null)} disabled={!signatureData}>Save</button>
+                </div>
+              </div>
+              <div className="action-row-bottom">
+                <button className="btn-secondary btn-cancel" onClick={resetCapture}>Cancel</button>
+              </div>
             </div>
           </div>
         </div>
       )}
+
+
 
       {modalType === 'error' && (
         <div className="modal-overlay">
@@ -938,12 +979,32 @@ function OCRLanding() {
         </div>
       )}
 
+
+
       {showSignaturePad && (
         <SignaturePad 
           onConfirm={handleSignatureConfirm} 
           onCancel={handleSignatureCancel} 
         />
       )}
+
+      {/* Signature confirmation modal shown immediately after Done */}
+      {showSignatureConfirm && (
+        <div className="modal-overlay">
+          <div className="modal-card">
+            <div className="modal-header">✔️ Signature Captured</div>
+            <div className="modal-body" style={{ textAlign: 'center' }}>
+              <p>Your signature has been captured. Return to the verify screen to save.</p>
+              {signatureData && <img src={signatureData} alt="signature preview" style={{ maxWidth: '100%', maxHeight: 120, border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6 }} />}
+            </div>
+            <div className="modal-footer">
+              <button className="btn-primary" onClick={() => setShowSignatureConfirm(false)}>Return to Verify</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+
 
       {toast && <div className="toast">{toast}</div>}
       <canvas ref={canvasRef} style={{ display: 'none' }} />
