@@ -232,6 +232,8 @@ export default function CameraScanner({ onCapture }) {
         video.style.height = '100%';
         video.style.objectFit = 'cover';
         video.style.display = 'block';
+        // Apply the selected preview filter to the video element so the user sees the final look
+        video.style.filter = getCssFilter(filter);
         
         // Assign stream
         if ('srcObject' in video) {
@@ -335,12 +337,33 @@ export default function CameraScanner({ onCapture }) {
     startCamera();
   }
 
+  // Keep the preview video element in sync with the selected filter
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.style.filter = getCssFilter(filter);
+    }
+  }, [filter]);
+
   function toggleFacing() {
     setFacingMode((m) => (m === 'user' ? 'environment' : 'user'));
   }
 
+  // Return a CSS filter string that approximates the canvas filter for both preview and capture
+  function getCssFilter(name) {
+    if (name === 'grayscale') return 'grayscale(100%)';
+    if (name === 'contrast') return 'contrast(140%) saturate(105%)';
+    return 'none';
+  }
+
   function applyFilterToCanvas(ctx, w, h) {
     if (filter === 'none') return;
+
+    // Prefer using ctx.filter if supported by the browser since it matches CSS filters exactly.
+    // If ctx.filter is available we assume the image was already drawn using that filter during capture.
+    // This function keeps a pixel-manipulation fallback for older browsers.
+    const supportsCanvasFilter = typeof ctx.filter !== 'undefined';
+    if (supportsCanvasFilter) return; // nothing to do; drawImage used ctx.filter already
+
     const imageData = ctx.getImageData(0, 0, w, h);
     const d = imageData.data;
     if (filter === 'grayscale') {
@@ -350,7 +373,9 @@ export default function CameraScanner({ onCapture }) {
       }
     }
     if (filter === 'contrast') {
-      const factor = (259 * (128 + 50)) / (255 * (259 - 50));
+      // Use a milder contrast factor to approximate CSS contrast(140%) visually
+      const contrastAmount = 40; // approx -> CSS contrast(140%)
+      const factor = (259 * (contrastAmount + 255)) / (255 * (259 - contrastAmount));
       for (let i = 0; i < d.length; i += 4) {
         d[i] = factor * (d[i] - 128) + 128;
         d[i + 1] = factor * (d[i + 1] - 128) + 128;
@@ -369,8 +394,21 @@ export default function CameraScanner({ onCapture }) {
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, w, h);
-    applyFilterToCanvas(ctx, w, h);
+
+    // If canvas supports ctx.filter, draw using the same CSS filter so preview == captured image.
+    const cssFilter = getCssFilter(filter);
+    if (typeof ctx.filter !== 'undefined') {
+      ctx.save();
+      ctx.filter = cssFilter;
+      ctx.drawImage(video, 0, 0, w, h);
+      ctx.filter = 'none';
+      ctx.restore();
+    } else {
+      // Fallback: draw raw then apply pixel manipulation as before
+      ctx.drawImage(video, 0, 0, w, h);
+      applyFilterToCanvas(ctx, w, h);
+    }
+
     const data = canvas.toDataURL('image/jpeg', 0.92);
     setCaptured(data);
     

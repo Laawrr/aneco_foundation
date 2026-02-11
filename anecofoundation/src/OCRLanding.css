@@ -900,9 +900,77 @@ html, body, #root {
   max-width: 500px;
   max-height: 85vh;
   overflow-y: auto;
+  overflow-x: hidden; /* prevent horizontal scroll inside modals */
   box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.1) inset;
   animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   border-top: 1px solid rgba(255, 255, 255, 0.2);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Signature preview in verify modal */
+.signature-preview-section {
+  margin-top: 16px;
+  padding: 12px;
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-radius: 12px;
+  border-left: 3px solid #3D45AA;
+}
+
+.signature-preview-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  letter-spacing: 0.5px;
+}
+
+.signature-preview-img {
+  width: 100%;
+  max-width: 300px;
+  height: auto;
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 6px;
+  background: white;
+}
+
+/* Mobile-first button layout */
+.action-row-top { 
+  width: 100%; 
+  margin-bottom: 8px; 
+  box-sizing: border-box;
+}
+.action-buttons {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.action-buttons .btn-primary, 
+.action-buttons .btn-secondary { 
+  flex: 1; 
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 14px 12px;
+  font-size: 15px;
+  height: 48px;
+  box-sizing: border-box;
+}
+
+.action-row-bottom { 
+  width: 100%; 
+  box-sizing: border-box;
+}
+.btn-cancel { 
+  width: 100%; 
+  box-sizing: border-box;
+  height: 48px;
+  padding: 14px 12px;
+  font-size: 15px;
 }
 
 @keyframes slideUp {
@@ -941,12 +1009,22 @@ html, body, #root {
 
 .modal-body {
   padding: 24px;
+  overflow-y: auto;
+  max-height: calc(100vh - 280px);
 }
 
+/* Responsive data grid for verified document details */
 .data-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.data-row-two-col {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  align-items: start;
 }
 
 .data-item {
@@ -956,6 +1034,43 @@ html, body, #root {
   border-left: 3px solid #3D45AA;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   transition: all 0.2s ease;
+  min-width: 0; /* prevent overflow inside grid items */
+}
+
+/* Labels and values: allow wrapping for readability */
+.data-item .label { display: block; margin-bottom: 6px; font-size: 12px; }
+.data-item .value, .data-item input.value, .data-item textarea.value { overflow-wrap: anywhere; white-space: normal; }
+
+/* Small-screen adjustments */
+@media (max-width: 520px) {
+  .data-row-two-col {
+    grid-template-columns: 1fr;
+  }
+
+  .modal-card {
+    max-width: 100%;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .modal-body {
+    padding: 16px;
+  }
+
+  .modal-footer {
+    padding: 12px 16px;
+  }
+
+  .action-buttons .btn-primary, 
+  .action-buttons .btn-secondary {
+    font-size: 14px;
+    padding: 12px 8px;
+    height: 46px;
+  }
+
+  .btn-cancel {
+    height: 46px;
+    padding: 12px 8px;
+  }
 }
 
 .data-item:hover {
@@ -1068,16 +1183,76 @@ html, body, #root {
 }
 
 .modal-footer {
-  padding: 20px 24px;
+  padding: 16px 20px;
   border-top: 1px solid rgba(0, 0, 0, 0.08);
   display: flex;
-  gap: 12px;
+  flex-direction: column;
+  gap: 0;
   background: #f8fafc;
+  width: 100%;
+  box-sizing: border-box;
 }
+
+/* Keep cancel on left and verification actions on the right */
+.modal-footer > .verify-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.modal-footer .btn-secondary {
+  flex: 0 0 auto;
+}
+
+/* Signature verify actions layout */
+.verify-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.signed-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.signature-preview {
+  width: 120px;
+  height: 30px;
+  object-fit: contain;
+  border: 1px solid rgba(0,0,0,0.05);
+  border-radius: 4px;
+  flex: 0 0 auto;
+  max-width: 38%;
+}
+
+.signature-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: nowrap;
+  margin-left: 8px;
+}
+
+.signature-buttons .btn-primary,
+.signature-buttons .btn-secondary {
+  flex: 0 0 auto;
+  min-width: 88px;
+}
+
 
 .btn-primary, .btn-secondary {
   flex: 1;
-  padding: 12px 20px;
+  padding: 14px 20px;
   border: none;
   border-radius: 10px;
   font-size: 15px;
@@ -1085,6 +1260,10 @@ html, body, #root {
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   letter-spacing: 0.2px;
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .btn-primary {
@@ -1101,6 +1280,13 @@ html, body, #root {
 
 .btn-primary:active {
   transform: translateY(0);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none !important;
+  box-shadow: none !important;
 }
 
 .btn-secondary {

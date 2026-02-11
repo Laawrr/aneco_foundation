@@ -12,7 +12,17 @@ if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 const upload = multer({ dest: uploadDir });
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Allow larger payloads for base64 signature PNGs
+app.use(express.json({ limit: '8mb' }));
+
+let signatureDir = process.env.SIGNATURE_DIR || '\\\\192.168.137.1\\shared';
+// Normalize for Windows UNC paths using win32
+try {
+  signatureDir = require('path').win32.normalize(signatureDir);
+} catch (e) {
+  // fallback: leave as-is
+}
+console.log('[server] signatureDir=', signatureDir);
 
 // Admin access code (from ENV or default)
 const ADMIN_CODE = process.env.ADMIN_CODE || 'ANEC0491977';
@@ -78,6 +88,7 @@ async function ensureOcrTable(conn) {
       electricity_bill DECIMAL(10, 2),
       amount_due DECIMAL(10, 2),
       total_sales DECIMAL(10, 2),
+      signature_name VARCHAR(255),
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -90,11 +101,33 @@ async function ensureOcrTable(conn) {
       throw err;
     }
   }
+
+  // Add signature_name for older databases
+  try {
+    await conn.query('ALTER TABLE ocr_data ADD COLUMN signature_name VARCHAR(255) NULL AFTER total_sales');
+  } catch (err) {
+    if (!err && err.code !== 'ER_DUP_FIELDNAME') {
+      throw err;
+    }
+  }
 }
 
 app.get('/health', async (req, res) => {
   const db = await testConnection();
   res.json({ ok: true, env: process.env.NODE_ENV || 'development', db });
+});
+
+// Endpoint to test write access to the network signature folder
+app.post('/api/test-signature-write', async (req, res) => {
+  const filename = `signature_test_${Date.now()}.txt`;
+  const savePath = path.join(signatureDir, filename);
+  try {
+    await fs.promises.writeFile(savePath, 'test');
+    res.json({ ok: true, testFile: savePath });
+  } catch (err) {
+    console.error('[api] test signature write failed:', err);
+    res.status(500).json({ ok: false, error: String(err) });
+  }
 });
 
 // Simple login endpoint that validates the admin code
@@ -163,8 +196,8 @@ app.get('/api/check-transaction/:transactionRef', async (req, res) => {
 
 // Endpoint to save parsed OCR data to database
 app.post('/api/ocr-data', async (req, res) => {
-  const { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company } = req.body;
-  console.log('[api] save-ocr-data requested', { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company });
+  const { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company, signature } = req.body;
+  console.log('[api] save-ocr-data requested', { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company, hasSignature: Boolean(signature) });
 
   if (!isFebruary2026(date)) {
     return res.status(400).json({
@@ -174,13 +207,43 @@ app.post('/api/ocr-data', async (req, res) => {
   }
 
   let conn;
+  let signatureName = null;
   try {
     conn = await getConnection();
     await ensureOcrTable(conn);
-    
+
+    // If signature provided (base64 png), save to network share
+    if (signature) {
+      try {
+        // Ensure signatureDir exists (attempt to create; if on network share this may fail)
+        try {
+          await fs.promises.mkdir(signatureDir, { recursive: true });
+        } catch (mkErr) {
+          console.warn('[api] could not create signature directory (maybe permission/network issue):', mkErr && mkErr.message ? mkErr.message : mkErr);
+        }
+
+        const m = String(signature).match(/^data:image\/png;base64,(.+)$/);
+        if (m && m[1]) {
+          const buffer = Buffer.from(m[1], 'base64');
+          const filename = `signature_${Date.now()}_${Math.random().toString(36).slice(2,8)}.png`;
+          // Use path.join without resolve to preserve UNC path semantics on Windows
+          const savePath = path.join(signatureDir, filename);
+          await fs.promises.writeFile(savePath, buffer);
+          signatureName = filename;
+          signaturePath = savePath; // full path for response
+          console.log('[api] signature saved to', savePath);
+        } else {
+          console.warn('[api] invalid signature format');
+        }
+      } catch (e) {
+        console.error('[api] failed to save signature:', e);
+        // don't fail the whole request; continue without signature
+      }
+    }
+
     // Insert the data
     const [result] = await conn.query(
-      'INSERT INTO ocr_data (transaction_ref, account_number, customer_name, scanner_name, company, date, electricity_bill, amount_due, total_sales) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO ocr_data (transaction_ref, account_number, customer_name, scanner_name, company, date, electricity_bill, amount_due, total_sales, signature_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
         transactionRef || null,
         accountNumber || null,
@@ -190,12 +253,13 @@ app.post('/api/ocr-data', async (req, res) => {
         date || null,
         electricityBill ? parseFloat(electricityBill.replace(/,/g, '')) : null,
         amountDue ? parseFloat(amountDue.replace(/,/g, '')) : null,
-        totalSales ? parseFloat(totalSales.replace(/,/g, '')) : null
+        totalSales ? parseFloat(totalSales.replace(/,/g, '')) : null,
+        signatureName
       ]
     );
     console.log('[api] OCR data saved, id=', result.insertId);
-    
-    res.json({ ok: true, id: result.insertId, message: 'Data saved successfully' });
+
+    res.json({ ok: true, id: result.insertId, signature: signatureName, signaturePath: signaturePath || null, message: 'Data saved successfully' });
   } catch (err) {
     console.error('[api] Error saving OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
     res.status(500).json({ ok: false, error: String(err) });
@@ -227,6 +291,7 @@ app.get('/api/ocr-data', async (req, res) => {
          electricity_bill  AS electricityBill,
          amount_due        AS amountDue,
          total_sales       AS totalSales,
+         signature_name     AS signatureName,
          created_at        AS createdAt
        FROM ocr_data
        ORDER BY id ASC

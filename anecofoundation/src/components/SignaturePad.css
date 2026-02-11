@@ -15,8 +15,37 @@
   justify-content: space-between;
   margin: 0 !important;
   padding: 0 !important;
-  /* Ensure it covers everything including toolbars */
   inset: 0 !important;
+}
+
+/* .signature-guide {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255,255,255,0.95);
+  color: #111827;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.08);
+  z-index: 10000;
+  pointer-events: none;
+} */
+
+.signature-guide-right{
+  position: absolute;
+  right: -12%;
+  top: 50%;
+  transform: translateY(-50%) rotate(-90deg);
+  background: rgba(255,255,255,0.95);
+  color: #111827;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(2,6,23,0.08);
+  z-index: 10000;
+  pointer-events: none;
 }
 
 .signature-header {
