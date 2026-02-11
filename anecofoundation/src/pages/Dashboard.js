@@ -3,6 +3,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../config';
 import './Dashboard.css';
 
+const ADMIN_AUTH_KEY = 'adminAuthed';
+const ADMIN_SESSION_KEY = 'adminSessionId';
+
 export default function Dashboard() {
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
@@ -28,15 +31,48 @@ export default function Dashboard() {
   const mobileMenuRef = useRef(null);
   const pdfRef = useRef(null);
 
+  const clearAdminAuth = () => {
+    localStorage.removeItem(ADMIN_AUTH_KEY);
+    localStorage.removeItem(ADMIN_SESSION_KEY);
+  };
+
+  const validateAdminSession = async () => {
+    const authed = localStorage.getItem(ADMIN_AUTH_KEY) === 'true';
+    const storedSessionId = localStorage.getItem(ADMIN_SESSION_KEY);
+    if (!authed || !storedSessionId) return false;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/session-status`);
+      const data = await res.json().catch(() => ({}));
+      return Boolean(res.ok && data.ok && data.sessionId && data.sessionId === storedSessionId);
+    } catch (err) {
+      return false;
+    }
+  };
+
   // Check authentication immediately and redirect if not authenticated
   useEffect(() => {
-    const authed = localStorage.getItem('adminAuthed') === 'true';
-    if (!authed) {
-      localStorage.removeItem('adminAuthed');
-      navigate('/login', { replace: true });
-      return;
-    }
-    setIsAuthenticated(true);
+    let active = true;
+
+    const verifyAuth = async () => {
+      const isValid = await validateAdminSession();
+      if (!active) return;
+
+      if (!isValid) {
+        clearAdminAuth();
+        setIsAuthenticated(false);
+        navigate('/login', { replace: true });
+        return;
+      }
+
+      setIsAuthenticated(true);
+    };
+
+    verifyAuth();
+
+    return () => {
+      active = false;
+    };
   }, [navigate]);
 
   // Close export menu and mobile menu when clicking outside
@@ -92,6 +128,7 @@ export default function Dashboard() {
           row.electricityBill !== null && row.electricityBill !== undefined
             ? String(row.electricityBill)
             : '',
+        signatureName: row.signatureName || '',
       }));
 
       setTableData(mapped);
@@ -105,19 +142,38 @@ export default function Dashboard() {
     // Only fetch data if authenticated
     if (!isAuthenticated) return;
 
+    let active = true;
+
+    const fetchIfSessionValid = async () => {
+      const isValid = await validateAdminSession();
+      if (!active) return;
+
+      if (!isValid) {
+        clearAdminAuth();
+        setIsAuthenticated(false);
+        navigate('/login', { replace: true });
+        return;
+      }
+
+      await fetchDashboardData();
+    };
+
     // Initial load
-    fetchDashboardData();
+    fetchIfSessionValid();
 
     // Poll in the background to keep table up to date
     const intervalId = setInterval(() => {
       // Don't override user edits while in edit mode
       if (!isEditMode) {
-        fetchDashboardData();
+        fetchIfSessionValid();
       }
     }, 5000); // 5 seconds
 
-    return () => clearInterval(intervalId);
-  }, [isEditMode, isAuthenticated]);
+    return () => {
+      active = false;
+      clearInterval(intervalId);
+    };
+  }, [isEditMode, isAuthenticated, navigate]);
 
   const handleCellChange = (rowToUpdate, columnKey, value) => {
     // Validate amount field to only allow numbers and decimal point
@@ -236,10 +292,10 @@ export default function Dashboard() {
     setIsEditMode(false);
   };
 
-  const addRow = () => {
+    const addRow = () => {
     setTableData((prev) => [
       ...prev,
-      { id: null, accountNumber: '', accountName: '', scannerName: '', referenceNo: '', amount: '' },
+      { id: null, accountNumber: '', accountName: '', scannerName: '', referenceNo: '', amount: '', signatureName: '' },
     ]);
   };
 
@@ -336,6 +392,7 @@ export default function Dashboard() {
         'ACCOUNT NAME': row.accountName || '',
         'TRANSACTION REFERENCE': row.referenceNo || '',
         AMOUNT: row.amount || '',
+        'SIGNATURE': row.signatureName || '',
       }));
 
       const worksheet = XLSX.utils.json_to_sheet(exportRows);
@@ -475,13 +532,68 @@ export default function Dashboard() {
       // Calculate starting Y position for content below header row (minimize gap)
       let yPos = currentY + headerFontSize * 0.5; // Minimal spacing after event detail
 
-      // Prepare table data
+      // Load signature images and convert to canvas for better PDF compatibility
+      const loadSignatureImage = (signatureName) => {
+        return new Promise((resolve) => {
+          if (!signatureName) {
+            resolve(null);
+            return;
+          }
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.src = `${API_BASE_URL}/api/signature/${signatureName}`;
+          
+          img.onload = () => {
+            try {
+              // Convert image to canvas to ensure proper format for PDF
+              const canvas = document.createElement('canvas');
+              canvas.width = img.width;
+              canvas.height = img.height;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              
+              // Return the canvas element which jsPDF can use directly
+              // jsPDF can also use the original img, but canvas is more reliable
+              resolve(canvas);
+            } catch (err) {
+              console.warn('Could not process signature image:', err);
+              // Fallback to original image if canvas conversion fails
+              try {
+                resolve(img);
+              } catch (fallbackErr) {
+                console.warn('Could not load signature:', fallbackErr);
+                resolve(null);
+              }
+            }
+          };
+          
+          img.onerror = () => {
+            console.warn('Signature image failed to load:', signatureName);
+            resolve(null);
+          };
+          
+          // Timeout after 5 seconds
+          setTimeout(() => {
+            if (!img.complete) {
+              console.warn('Signature image load timeout:', signatureName);
+              resolve(null);
+            }
+          }, 5000);
+        });
+      };
+
+      // Load all signature images
+      const signatureImages = await Promise.all(
+        displayTableData.map((row) => loadSignatureImage(row.signatureName))
+      );
+
+      // Prepare table data (signature column will be handled in didParseCell)
       const tableBody = displayTableData.map((row, index) => [
         String(index + 1),
         row.accountNumber || '',
         row.accountName || '',
         row.referenceNo || '',
-        row.amount || ''
+        '' // Placeholder for signature - will be replaced with image
       ]);
 
       // Calculate table column widths (adaptive to page width - percentage-based)
@@ -489,18 +601,18 @@ export default function Dashboard() {
       const availableWidth = pageWidth - (margin * 2);
       const tableFontSize = Math.max(7, Math.min(10, pageWidth * 0.025)); // 2.5% of page width
       
-      // Adaptive column widths (percentages of available width)
+      // Adaptive column widths (percentages of available width) - AMOUNT column removed
       const columnWidths = {
         0: availableWidth * 0.08,  // NO. - 8%
         1: availableWidth * 0.24, // ACCOUNT NUMBER - 24%
-        2: availableWidth * 0.28, // ACCOUNT NAME - 28%
+        2: availableWidth * 0.30, // ACCOUNT NAME - 30%
         3: availableWidth * 0.24, // TRANSACTION REFERENCE - 24%
-        4: availableWidth * 0.16  // AMOUNT - 16%
+        4: availableWidth * 0.14  // SIGNATURE - 14%
       };
 
       // Add table using autoTable
       doc.autoTable({
-        head: [['NO.', 'ACCOUNT NUMBER', 'ACCOUNT NAME', 'TRANSACTION REFERENCE', 'AMOUNT']],
+        head: [['NO.', 'ACCOUNT NUMBER', 'ACCOUNT NAME', 'TRANSACTION REFERENCE', 'SIGNATURE']],
         body: tableBody,
         startY: yPos,
         margin: { left: margin, right: margin, top: yPos },
@@ -542,6 +654,68 @@ export default function Dashboard() {
         tableWidth: availableWidth,
         showHead: 'everyPage',
         rowPageBreak: 'avoid', // Prevent rows from breaking across pages
+        didParseCell: function (data) {
+          // Clear text content for signature column to make room for image
+          // Only modify body cells so header keeps "SIGNATURE"
+          if (data.section === 'body' && data.column.index === 4) {
+            const rowIndex = data.row.index;
+            if (rowIndex < signatureImages.length && signatureImages[rowIndex]) {
+              data.cell.text = []; // Clear text to make room for image
+            } else {
+              data.cell.text = ['-']; // Show dash if no signature
+            }
+          }
+        },
+        didDrawCell: function (data) {
+          // Add signature images to column 4 (signature column) after cell is drawn
+          if (data.section === 'body' && data.column.index === 4 && data.row.index < signatureImages.length) {
+            const signatureElement = signatureImages[data.row.index];
+            if (signatureElement && signatureElement.width > 0 && signatureElement.height > 0) {
+              try {
+                // Calculate image size to fit in cell
+                const cellHeight = data.cell.height;
+                const cellWidth = data.cell.width;
+                const padding = Math.max(2, tableFontSize * 0.3) * 2;
+                const maxImgHeight = Math.max(5, cellHeight - padding);
+                const maxImgWidth = Math.max(5, cellWidth - padding);
+                
+                // Get dimensions (works for both Image and Canvas elements)
+                const imgWidth_orig = signatureElement.width;
+                const imgHeight_orig = signatureElement.height;
+                
+                // Maintain aspect ratio
+                const imgAspectRatio = imgHeight_orig / imgWidth_orig;
+                let imgWidth = maxImgWidth;
+                let imgHeight = imgWidth * imgAspectRatio;
+                
+                if (imgHeight > maxImgHeight) {
+                  imgHeight = maxImgHeight;
+                  imgWidth = imgHeight / imgAspectRatio;
+                }
+                
+                // Ensure minimum size
+                if (imgWidth < 5) {
+                  imgWidth = 5;
+                  imgHeight = imgWidth * imgAspectRatio;
+                }
+                if (imgHeight < 5) {
+                  imgHeight = 5;
+                  imgWidth = imgHeight / imgAspectRatio;
+                }
+                
+                // Center the image in the cell
+                const x = data.cell.x + (cellWidth - imgWidth) / 2;
+                const y = data.cell.y + (cellHeight - imgHeight) / 2;
+                
+                // Add the image/canvas to the PDF (jsPDF supports both)
+                doc.addImage(signatureElement, 'PNG', x, y, imgWidth, imgHeight);
+              } catch (err) {
+                console.warn('Could not add signature image to PDF:', err);
+                // If image fails, the text '-' will already be shown from didParseCell
+              }
+            }
+          }
+        },
         didDrawPage: function (data) {
           // Add header on each page (logo, company name, date - all horizontally aligned)
           if (data.pageNumber > 1) {
@@ -615,7 +789,7 @@ export default function Dashboard() {
           to="/login"
           className="logout-btn desktop-logout"
           onClick={() => {
-            localStorage.removeItem('adminAuthed');
+            clearAdminAuth();
           }}
         >
           Logout
@@ -737,7 +911,7 @@ export default function Dashboard() {
                 to="/login"
                 className="mobile-menu-item mobile-menu-logout"
                 onClick={() => {
-                  localStorage.removeItem('adminAuthed');
+                  clearAdminAuth();
                   setShowMobileMenu(false);
                 }}
               >
@@ -959,13 +1133,14 @@ export default function Dashboard() {
                     <th>ACCOUNT NAME</th>
                     <th>TRANSACTION REFERENCE</th>
                     <th>AMOUNT</th>
+                    <th>SIGNATURE</th>
                     {isEditMode && <th style={{ width: '60px' }}></th>}
                   </tr>
                 </thead>
                 <tbody>
                   {displayTableData.length === 0 ? (
                     <tr>
-                      <td colSpan={isEditMode ? 7 : 6} style={{ textAlign: 'center', padding: '20px' }}>
+                      <td colSpan={isEditMode ? 8 : 7} style={{ textAlign: 'center', padding: '20px' }}>
                         {hasActiveFilters ? 'No results found' : 'No data available'}
                       </td>
                     </tr>
@@ -1033,6 +1208,24 @@ export default function Dashboard() {
                           />
                         ) : (
                           row.amount
+                        )}
+                      </td>
+                      <td>
+                        {row.signatureName ? (
+                          <img
+                            src={`${API_BASE_URL}/api/signature/${row.signatureName}`}
+                            alt="Signature"
+                            className="signature-img"
+                            style={{ maxWidth: '80px', maxHeight: '40px', objectFit: 'contain', cursor: 'pointer' }}
+                            onClick={() => {
+                              window.open(`${API_BASE_URL}/api/signature/${row.signatureName}`, '_blank');
+                            }}
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <span style={{ color: '#999', fontSize: '12px' }}>-</span>
                         )}
                       </td>
                       {isEditMode && (
@@ -1148,6 +1341,26 @@ export default function Dashboard() {
                       ) : (
                         <div className="mobile-field-value">{row.amount || '-'}</div>
                       )}
+                    </div>
+                    <div className="mobile-field">
+                      <label>SIGNATURE</label>
+                      <div className="mobile-field-value">
+                        {row.signatureName ? (
+                          <img
+                            src={`${API_BASE_URL}/api/signature/${row.signatureName}`}
+                            alt="Signature"
+                            style={{ maxWidth: '100%', maxHeight: '100px', objectFit: 'contain', cursor: 'pointer', marginTop: '8px' }}
+                            onClick={() => {
+                              window.open(`${API_BASE_URL}/api/signature/${row.signatureName}`, '_blank');
+                            }}
+                            onError={(e) => {
+                              e.target.style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <span style={{ color: '#999' }}>-</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
