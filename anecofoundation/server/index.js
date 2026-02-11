@@ -16,14 +16,69 @@ app.use(cors());
 // Allow larger payloads for base64 signature PNGs
 app.use(express.json({ limit: '8mb' }));
 
-let signatureDir = process.env.SIGNATURE_DIR || '\\\\192.168.137.1\\shared';
-// Normalize for Windows UNC paths using win32
-try {
-  signatureDir = require('path').win32.normalize(signatureDir);
-} catch (e) {
-  // fallback: leave as-is
+function resolveSignatureDir(rawValue) {
+  let value = String(rawValue || '').trim();
+  if (!value) return '\\\\192.168.0.101\\shared';
+
+  // Remove accidental wrapping quotes in .env values.
+  value = value.replace(/^['"]|['"]$/g, '');
+  // Accept slash style from copied paths.
+  value = value.replace(/\//g, '\\');
+
+  // If value starts with a single "\" and resembles UNC, fix it to "\\server\share".
+  if (value.startsWith('\\') && !value.startsWith('\\\\')) {
+    value = `\\${value}`;
+  }
+
+  // Auto-correct malformed UNC accidentally turned into local path, e.g. C:\192.168.0.101\shared
+  const malformedUncMatch = value.match(/^[A-Za-z]:\\(\d{1,3}(?:\.\d{1,3}){3}(?:\\.*)?)$/);
+  if (malformedUncMatch) {
+    value = `\\\\${malformedUncMatch[1]}`;
+  }
+
+  // Auto-correct root-relative ip path, e.g. \192.168.0.101\shared
+  const rootRelativeIpMatch = value.match(/^\\(\d{1,3}(?:\.\d{1,3}){3}(?:\\.*)?)$/);
+  if (rootRelativeIpMatch) {
+    value = `\\\\${rootRelativeIpMatch[1]}`;
+  }
+
+  let normalized = value;
+  try {
+    normalized = path.win32.normalize(value);
+  } catch (e) {
+    normalized = value;
+  }
+
+  // Canonicalize UNC-like IP path to always start with two backslashes.
+  const singleSlashIpMatch = String(normalized).match(/^\\(\d{1,3}(?:\.\d{1,3}){3}(?:\\.*)?)$/);
+  if (singleSlashIpMatch) {
+    return `\\\\${singleSlashIpMatch[1]}`;
+  }
+
+  return normalized;
 }
+
+function isLikelyLocalIpPath(value) {
+  return /^[A-Za-z]:\\\d{1,3}(?:\.\d{1,3}){3}(?:\\|$)/.test(String(value || ''));
+}
+
+function isAllowedSignatureDir(value) {
+  const normalized = String(value || '').toUpperCase();
+  // Allow exact UNC share root (with optional trailing slash) or mapped Z drive.
+  if (/^\\\\192\.168\.0\.101\\SHARED(?:\\)?$/.test(normalized)) return true;
+  if (/^Z:\\(?:)?$/.test(normalized)) return true;
+  return false;
+}
+
+const signatureDir = resolveSignatureDir(process.env.SIGNATURE_DIR || '\\\\192.168.0.101\\shared');
 console.log('[server] signatureDir=', signatureDir);
+console.log('[server] signatureDir(raw)=', JSON.stringify(signatureDir));
+
+if (isLikelyLocalIpPath(signatureDir) || !isAllowedSignatureDir(signatureDir)) {
+  console.error('[server] Invalid SIGNATURE_DIR:', signatureDir);
+  console.error('[server] Allowed values: \\\\192.168.0.101\\shared or Z:\\');
+  process.exit(1);
+}
 
 // Admin access code (from ENV or default)
 const ADMIN_CODE = process.env.ADMIN_CODE || 'ANEC0491977';
@@ -192,6 +247,15 @@ async function saveSignatureToSharedFolder(signatureDataUrl) {
   const m = String(signatureDataUrl || '').match(/^data:image\/png;base64,(.+)$/);
   if (!m || !m[1]) {
     return { signatureName: null, signaturePath: null, warning: 'Invalid signature format', durationMs: Date.now() - startedAt };
+  }
+
+  if (isLikelyLocalIpPath(signatureDir)) {
+    return {
+      signatureName: null,
+      signaturePath: null,
+      warning: `Invalid SIGNATURE_DIR resolved to local path: ${signatureDir}. Use UNC \\\\192.168.0.101\\shared or mapped drive like Z:\\`,
+      durationMs: Date.now() - startedAt,
+    };
   }
 
   try {
@@ -374,6 +438,13 @@ app.post('/api/test-signature-write', async (req, res) => {
   const filename = `signature_test_${Date.now()}.txt`;
   const savePath = path.join(signatureDir, filename);
   try {
+    if (isLikelyLocalIpPath(signatureDir)) {
+      return res.status(500).json({
+        ok: false,
+        error: `Invalid SIGNATURE_DIR resolved to local path: ${signatureDir}`,
+        details: ['Use UNC path (\\\\192.168.0.101\\shared) or mapped drive (Z:\\).'],
+      });
+    }
     await fs.promises.writeFile(savePath, 'test');
     res.json({ ok: true, testFile: savePath });
   } catch (err) {
@@ -512,6 +583,24 @@ app.get('/api/check-transaction/:transactionRef', async (req, res) => {
 app.post('/api/ocr-data', async (req, res) => {
   const { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company, signature } = req.body;
   console.log('[api] save-ocr-data requested', { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company, hasSignature: Boolean(signature) });
+
+  if (!signature) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Signature is required',
+      code: 'SIGNATURE_REQUIRED',
+      details: ['No signature payload was received by the server.'],
+    });
+  }
+
+  if (!/^data:image\/png;base64,/.test(String(signature))) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Invalid signature format',
+      code: 'INVALID_SIGNATURE_FORMAT',
+      details: ['Signature must be a PNG data URL (data:image/png;base64,...)'],
+    });
+  }
 
   const { errors, data } = validateOcrPayload(req.body || {});
   if (errors.length > 0) {
