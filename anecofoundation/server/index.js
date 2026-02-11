@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const sharp = require('sharp');
 const { createWorker } = require('tesseract.js');
+require('dotenv').config();
 
 const uploadDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
@@ -28,6 +29,7 @@ console.log('[server] signatureDir=', signatureDir);
 const ADMIN_CODE = process.env.ADMIN_CODE || 'ANEC0491977';
 // Changes on each server boot so frontend sessions are invalidated after restart.
 const SERVER_SESSION_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+const SIGNATURE_IO_TIMEOUT_MS = Number(process.env.SIGNATURE_IO_TIMEOUT_MS || 10000);
 
 let worker;
 
@@ -67,6 +69,177 @@ function normalizeAccountNumber(value) {
     .replace(/\s+/g, '');
 }
 
+function normalizeTransactionRef(value) {
+  return String(value || '')
+    .replace(/[^\d]/g, '')
+    .trim();
+}
+
+function normalizeText(value) {
+  return String(value || '').trim();
+}
+
+function countDigits(value) {
+  return (String(value || '').match(/\d/g) || []).length;
+}
+
+function parseMoney(value) {
+  if (value == null) return null;
+  const normalized = String(value).replace(/,/g, '').trim();
+  if (!normalized) return null;
+  const parsed = Number.parseFloat(normalized);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function validateOcrPayload(payload) {
+  const errors = [];
+
+  const transactionRef = normalizeTransactionRef(payload.transactionRef);
+  const accountNumber = normalizeAccountNumber(payload.accountNumber);
+  const customerName = normalizeText(payload.customerName);
+  const scannerName = normalizeText(payload.scannerName);
+  const date = normalizeText(payload.date);
+  const company = normalizeText(payload.company) || null;
+  const electricityBill = parseMoney(payload.electricityBill);
+  const amountDue = parseMoney(payload.amountDue);
+  const totalSales = parseMoney(payload.totalSales);
+
+  if (!transactionRef) errors.push('Transaction Reference is required');
+  if (transactionRef && countDigits(transactionRef) < 15) {
+    errors.push('Transaction reference must have at least 15 digits');
+  }
+
+  if (!date) errors.push('Date is required');
+
+  if (!customerName) errors.push('Customer Name is required');
+  if (customerName && !/^[A-Za-z][A-Za-z\s,\-./']*$/.test(customerName)) {
+    errors.push('Customer Name must contain valid text only');
+  }
+
+  if (!accountNumber) errors.push('Account Number is required');
+  const accountDigits = accountNumber.replace(/^B/, '');
+  if (accountNumber && !/^\d{6,}$/.test(accountDigits)) {
+    errors.push('Account number must contain at least 6 digits');
+  }
+
+  if (!scannerName) errors.push('Scanner Name is required');
+
+  if (electricityBill == null) {
+    errors.push('Amount (Bill) is required');
+  } else if (Number.isNaN(electricityBill) || electricityBill < 50) {
+    errors.push('Bill amount must be at least 50');
+  }
+
+  if (amountDue !== null && Number.isNaN(amountDue)) {
+    errors.push('Amount Due must be a valid number');
+  }
+
+  if (totalSales !== null && Number.isNaN(totalSales)) {
+    errors.push('Total Sales must be a valid number');
+  }
+
+  return {
+    errors,
+    data: {
+      transactionRef,
+      accountNumber,
+      customerName,
+      scannerName,
+      date,
+      company,
+      electricityBill,
+      amountDue: Number.isNaN(amountDue) ? null : amountDue,
+      totalSales: Number.isNaN(totalSales) ? null : totalSales,
+    },
+  };
+}
+
+async function acquireAccountLock(conn, accountNumber) {
+  const lockKey = `ocr-account:${accountNumber}`;
+  const [rows] = await conn.query('SELECT GET_LOCK(?, 5) AS acquired', [lockKey]);
+  const acquired = rows && rows[0] && Number(rows[0].acquired) === 1;
+  return { lockKey, acquired };
+}
+
+async function releaseAccountLock(conn, lockKey) {
+  if (!conn || !lockKey) return;
+  try {
+    await conn.query('SELECT RELEASE_LOCK(?) AS released', [lockKey]);
+  } catch (err) {
+    console.warn('[db] failed to release account lock', lockKey, err && err.message ? err.message : err);
+  }
+}
+
+function runWithTimeout(promise, timeoutMs, label) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    promise
+      .then((value) => {
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
+}
+
+async function saveSignatureToSharedFolder(signatureDataUrl) {
+  const startedAt = Date.now();
+  const m = String(signatureDataUrl || '').match(/^data:image\/png;base64,(.+)$/);
+  if (!m || !m[1]) {
+    return { signatureName: null, signaturePath: null, warning: 'Invalid signature format', durationMs: Date.now() - startedAt };
+  }
+
+  try {
+    await runWithTimeout(
+      fs.promises.mkdir(signatureDir, { recursive: true }),
+      SIGNATURE_IO_TIMEOUT_MS,
+      'Signature directory check'
+    );
+
+    const buffer = Buffer.from(m[1], 'base64');
+    const filename = `signature_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.png`;
+    const savePath = path.join(signatureDir, filename);
+
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      try {
+        await runWithTimeout(
+          fs.promises.writeFile(savePath, buffer),
+          SIGNATURE_IO_TIMEOUT_MS,
+          `Signature write attempt ${attempt}`
+        );
+        return {
+          signatureName: filename,
+          signaturePath: savePath,
+          warning: null,
+          durationMs: Date.now() - startedAt,
+        };
+      } catch (err) {
+        lastError = err;
+      }
+    }
+
+    return {
+      signatureName: null,
+      signaturePath: null,
+      warning: lastError && lastError.message ? lastError.message : String(lastError || 'Unknown signature write error'),
+      durationMs: Date.now() - startedAt,
+    };
+  } catch (err) {
+    return {
+      signatureName: null,
+      signaturePath: null,
+      warning: err && err.message ? err.message : String(err),
+      durationMs: Date.now() - startedAt,
+    };
+  }
+}
+
 async function ensureOcrTable(conn) {
   await conn.query(`
     CREATE TABLE IF NOT EXISTS ocr_data (
@@ -98,7 +271,7 @@ async function ensureOcrTable(conn) {
   try {
     await conn.query('ALTER TABLE ocr_data ADD COLUMN signature_name VARCHAR(255) NULL AFTER total_sales');
   } catch (err) {
-    if (!err && err.code !== 'ER_DUP_FIELDNAME') {
+    if (!err || err.code !== 'ER_DUP_FIELDNAME') {
       throw err;
     }
   }
@@ -312,21 +485,66 @@ app.get('/api/check-account/:accountNumber', async (req, res) => {
   }
 });
 
+// Endpoint to check if transaction reference already exists
+app.get('/api/check-transaction/:transactionRef', async (req, res) => {
+  const normalizedRef = normalizeTransactionRef(req.params.transactionRef);
+  console.log(`[api] check-transaction requested: transactionRef=${normalizedRef}`);
+  let conn;
+  try {
+    conn = await getConnection();
+    await ensureOcrTable(conn);
+    const [rows] = await conn.query(
+      'SELECT COUNT(*) as count FROM ocr_data WHERE transaction_ref = ?',
+      [normalizedRef]
+    );
+    const exists = rows[0].count > 0;
+    console.log(`[api] check-transaction result: count=${rows[0].count}`);
+    res.json({ ok: true, exists, count: rows[0].count, transactionRef: normalizedRef });
+  } catch (err) {
+    console.error('[api] Error checking transaction reference:', err && err.code ? `${err.code}: ${err.message}` : err);
+    res.status(500).json({ ok: false, error: String(err) });
+  } finally {
+    if (conn) conn && conn.release();
+  }
+});
+
 // Endpoint to save parsed OCR data to database
 app.post('/api/ocr-data', async (req, res) => {
   const { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company, signature } = req.body;
   console.log('[api] save-ocr-data requested', { transactionRef, accountNumber, customerName, scannerName, date, electricityBill, amountDue, totalSales, company, hasSignature: Boolean(signature) });
 
+  const { errors, data } = validateOcrPayload(req.body || {});
+  if (errors.length > 0) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Validation failed',
+      code: 'VALIDATION_ERROR',
+      details: errors,
+    });
+  }
+
   let conn;
   let signatureName = null;
   let signaturePath = null;
+  let signatureSaveMs = 0;
+  let lockKey = null;
   try {
     conn = await getConnection();
     await ensureOcrTable(conn);
 
+    const lock = await acquireAccountLock(conn, data.accountNumber);
+    if (!lock.acquired) {
+      return res.status(429).json({
+        ok: false,
+        error: 'A save is already in progress for this account number. Please try again.',
+        code: 'ACCOUNT_LOCK_TIMEOUT',
+      });
+    }
+    lockKey = lock.lockKey;
+
     const [existingRows] = await conn.query(
       'SELECT COUNT(*) AS count FROM ocr_data WHERE UPPER(REPLACE(account_number, " ", "")) = ?',
-      [normalizeAccountNumber(accountNumber)]
+      [data.accountNumber]
     );
     if (existingRows && existingRows[0] && Number(existingRows[0].count) > 0) {
       return res.status(409).json({
@@ -336,32 +554,36 @@ app.post('/api/ocr-data', async (req, res) => {
       });
     }
 
+    const [existingTxRows] = await conn.query(
+      'SELECT COUNT(*) AS count FROM ocr_data WHERE transaction_ref = ?',
+      [data.transactionRef]
+    );
+    if (existingTxRows && existingTxRows[0] && Number(existingTxRows[0].count) > 0) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Transaction reference already exists in database',
+        code: 'DUPLICATE_TRANSACTION_REFERENCE',
+      });
+    }
+
     // If signature provided (base64 png), save to network share
     if (signature) {
-      try {
-        // Ensure signatureDir exists (attempt to create; if on network share this may fail)
-        try {
-          await fs.promises.mkdir(signatureDir, { recursive: true });
-        } catch (mkErr) {
-          console.warn('[api] could not create signature directory (maybe permission/network issue):', mkErr && mkErr.message ? mkErr.message : mkErr);
-        }
-
-        const m = String(signature).match(/^data:image\/png;base64,(.+)$/);
-        if (m && m[1]) {
-          const buffer = Buffer.from(m[1], 'base64');
-          const filename = `signature_${Date.now()}_${Math.random().toString(36).slice(2,8)}.png`;
-          // Use path.join without resolve to preserve UNC path semantics on Windows
-          const savePath = path.join(signatureDir, filename);
-          await fs.promises.writeFile(savePath, buffer);
-          signatureName = filename;
-          signaturePath = savePath; // full path for response
-          console.log('[api] signature saved to', savePath);
-        } else {
-          console.warn('[api] invalid signature format');
-        }
-      } catch (e) {
-        console.error('[api] failed to save signature:', e);
-        // don't fail the whole request; continue without signature
+      const signatureResult = await saveSignatureToSharedFolder(signature);
+      signatureName = signatureResult.signatureName;
+      signaturePath = signatureResult.signaturePath;
+      signatureSaveMs = signatureResult.durationMs;
+      if (signaturePath) {
+        console.log('[api] signature saved to', signaturePath, `(in ${signatureSaveMs}ms)`);
+      } else {
+        const warning = signatureResult.warning || 'Unknown signature write failure';
+        console.warn('[api] signature write failed:', warning, `(after ${signatureSaveMs}ms)`);
+        return res.status(503).json({
+          ok: false,
+          error: 'Failed to save signature image to network shared folder',
+          code: 'SIGNATURE_SAVE_FAILED',
+          details: [warning],
+          signatureSaveMs,
+        });
       }
     }
 
@@ -369,25 +591,42 @@ app.post('/api/ocr-data', async (req, res) => {
     const [result] = await conn.query(
       'INSERT INTO ocr_data (transaction_ref, account_number, customer_name, scanner_name, company, date, electricity_bill, amount_due, total_sales, signature_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       [
-        transactionRef || null,
-        normalizeAccountNumber(accountNumber) || null,
-        customerName || null,
-        scannerName || null,
-        company || null,
-        date || null,
-        electricityBill ? parseFloat(String(electricityBill).replace(/,/g, '')) : null,
-        amountDue ? parseFloat(String(amountDue).replace(/,/g, '')) : null,
-        totalSales ? parseFloat(String(totalSales).replace(/,/g, '')) : null,
+        data.transactionRef,
+        data.accountNumber,
+        data.customerName,
+        data.scannerName,
+        data.company,
+        data.date,
+        data.electricityBill,
+        data.amountDue,
+        data.totalSales,
         signatureName
       ]
     );
     console.log('[api] OCR data saved, id=', result.insertId);
 
-    res.json({ ok: true, id: result.insertId, signature: signatureName, signaturePath: signaturePath || null, message: 'Data saved successfully' });
+    res.json({
+      ok: true,
+      id: result.insertId,
+      signature: signatureName,
+      signaturePath: signaturePath || null,
+      signatureSaveMs,
+      message: 'Data saved successfully',
+    });
   } catch (err) {
+    if (err && err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({
+        ok: false,
+        error: 'Account number already exists in database',
+        code: 'DUPLICATE_ACCOUNT_NUMBER',
+      });
+    }
     console.error('[api] Error saving OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
     res.status(500).json({ ok: false, error: String(err) });
   } finally {
+    if (conn && lockKey) {
+      await releaseAccountLock(conn, lockKey);
+    }
     if (conn) conn && conn.release();
   }
 });
@@ -439,23 +678,56 @@ app.put('/api/ocr-data/:id', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Invalid id' });
   }
 
-  const {
-    transactionRef,
-    accountNumber,
-    customerName,
-    scannerName,
-    date,
-    electricityBill,
-    amountDue,
-    totalSales,
-    company,
-  } = req.body;
+  const { errors, data } = validateOcrPayload(req.body || {});
+  if (errors.length > 0) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Validation failed',
+      code: 'VALIDATION_ERROR',
+      details: errors,
+    });
+  }
 
   let conn;
+  let lockKey = null;
   try {
     conn = await getConnection();
 
     await ensureOcrTable(conn);
+
+    const lock = await acquireAccountLock(conn, data.accountNumber);
+    if (!lock.acquired) {
+      return res.status(429).json({
+        ok: false,
+        error: 'An update is already in progress for this account number. Please try again.',
+        code: 'ACCOUNT_LOCK_TIMEOUT',
+      });
+    }
+    lockKey = lock.lockKey;
+
+    const [existingRows] = await conn.query(
+      'SELECT COUNT(*) AS count FROM ocr_data WHERE UPPER(REPLACE(account_number, " ", "")) = ? AND id <> ?',
+      [data.accountNumber, id]
+    );
+    if (existingRows && existingRows[0] && Number(existingRows[0].count) > 0) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Account number already exists in database',
+        code: 'DUPLICATE_ACCOUNT_NUMBER',
+      });
+    }
+
+    const [existingTxRows] = await conn.query(
+      'SELECT COUNT(*) AS count FROM ocr_data WHERE transaction_ref = ? AND id <> ?',
+      [data.transactionRef, id]
+    );
+    if (existingTxRows && existingTxRows[0] && Number(existingTxRows[0].count) > 0) {
+      return res.status(409).json({
+        ok: false,
+        error: 'Transaction reference already exists in database',
+        code: 'DUPLICATE_TRANSACTION_REFERENCE',
+      });
+    }
 
     const [result] = await conn.query(
       `UPDATE ocr_data
@@ -470,24 +742,34 @@ app.put('/api/ocr-data/:id', async (req, res) => {
            total_sales     = ?
        WHERE id = ?`,
       [
-        transactionRef || null,
-        accountNumber || null,
-        customerName || null,
-        scannerName || null,
-        company || null,
-        date || null,
-        electricityBill != null ? parseFloat(String(electricityBill).replace(/,/g, '')) : null,
-        amountDue != null ? parseFloat(String(amountDue).replace(/,/g, '')) : null,
-        totalSales != null ? parseFloat(String(totalSales).replace(/,/g, '')) : null,
+        data.transactionRef,
+        data.accountNumber,
+        data.customerName,
+        data.scannerName,
+        data.company,
+        data.date,
+        data.electricityBill,
+        data.amountDue,
+        data.totalSales,
         id,
       ]
     );
 
     res.json({ ok: true, affectedRows: result.affectedRows });
   } catch (err) {
+    if (err && err.code === 'ER_DUP_ENTRY') {
+      return res.status(409).json({
+        ok: false,
+        error: 'Account number already exists in database',
+        code: 'DUPLICATE_ACCOUNT_NUMBER',
+      });
+    }
     console.error('[api] Error updating OCR data:', err && err.code ? `${err.code}: ${err.message}` : err);
     res.status(500).json({ ok: false, error: String(err) });
   } finally {
+    if (conn && lockKey) {
+      await releaseAccountLock(conn, lockKey);
+    }
     if (conn) conn && conn.release();
   }
 });
