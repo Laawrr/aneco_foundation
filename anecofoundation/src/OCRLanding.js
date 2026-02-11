@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import './OCRLanding.css';
 import { createWorker } from 'tesseract.js';
 import ImageCropper from './components/ImageCropper';
+import SignaturePad from './components/SignaturePad';
 
 const SCANNER_NAME_STORAGE_KEY = 'anecoScannerName';
 
@@ -194,6 +195,8 @@ function OCRLanding() {
   const [scannerName, setScannerName] = useState(() => localStorage.getItem(SCANNER_NAME_STORAGE_KEY) || '');
   const [scannerNameInput, setScannerNameInput] = useState(() => localStorage.getItem(SCANNER_NAME_STORAGE_KEY) || '');
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showSignaturePad, setShowSignaturePad] = useState(false);
+  const [signatureData, setSignatureData] = useState(null);
   const workerRef = useRef(null);
   const hasScannerIdentity = Boolean(scannerName.trim());
 
@@ -505,7 +508,7 @@ function OCRLanding() {
     }
   };
 
-  const saveToDatabase = async () => {
+  const handleSaveClick = () => {
     if (!editableVerifiedData) return;
 
     const countDigits = (str) => (str ? (str.match(/\d/g) || []).length : 0);
@@ -540,6 +543,23 @@ function OCRLanding() {
       return;
     }
 
+    // Show signature pad instead of directly saving
+    setShowSignaturePad(true);
+  };
+
+  const handleSignatureConfirm = async (signature) => {
+    setSignatureData(signature);
+    setShowSignaturePad(false);
+    await saveToDatabase(signature);
+  };
+
+  const handleSignatureCancel = () => {
+    setShowSignaturePad(false);
+  };
+
+  const saveToDatabase = async (signature = null) => {
+    if (!editableVerifiedData) return;
+
     setStatus('Saving...');
     try {
       const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:3001';
@@ -564,7 +584,8 @@ function OCRLanding() {
         electricityBill: String(editableVerifiedData.electricityBill).replace(/,/g, '').trim(),
         customerName: editableVerifiedData.customerName.trim(),
         accountNumber: editableVerifiedData.accountNumber.trim(),
-        scannerName: scannerName.trim()
+        scannerName: scannerName.trim(),
+        signature: signature || signatureData || null
       };
 
       const res = await fetch(`${API_BASE}/api/ocr-data`, {
@@ -576,6 +597,7 @@ function OCRLanding() {
         showToast('✅ Saved successfully');
         setModalType(null);
         setEditableVerifiedData(null);
+        setSignatureData(null);
         resetCapture();
       } else {
         showToast(`❌ Failed to save: ${res.status}`);
@@ -592,6 +614,8 @@ function OCRLanding() {
     setEditableVerifiedData(null);
     setRawText('');
     setModalType(null);
+    setSignatureData(null);
+    setShowSignaturePad(false);
     setMode('capture');
   };
 
@@ -625,6 +649,21 @@ function OCRLanding() {
   };
 
   const handleVerifiedFieldChange = (field, value) => {
+    // Restrict transactionRef to numbers only
+    if (field === 'transactionRef') {
+      value = value.replace(/[^\d]/g, '');
+    }
+    // Restrict electricityBill to numbers and decimal point only
+    if (field === 'electricityBill') {
+      // Allow numbers and one decimal point
+      value = value.replace(/[^\d.]/g, '');
+      // Ensure only one decimal point
+      const parts = value.split('.');
+      if (parts.length > 2) {
+        value = parts[0] + '.' + parts.slice(1).join('');
+      }
+    }
+    
     setEditableVerifiedData((prev) => ({
       ...(prev || {}),
       [field]: value
@@ -828,7 +867,7 @@ function OCRLanding() {
                   />
                 </div>
                 <div className="data-item">
-                  <span className="label">Account:</span>
+                  <span className="label">Account Number:</span>
                   <textarea
                     className="value"
                     value={editableVerifiedData.accountNumber || ''}
@@ -845,7 +884,7 @@ function OCRLanding() {
             </div>
             <div className="modal-footer">
               <button className="btn-secondary" onClick={resetCapture}>Cancel</button>
-              <button className="btn-primary" onClick={saveToDatabase}>Save ✓</button>
+              <button className="btn-primary" onClick={handleSaveClick}>Save ✓</button>
             </div>
           </div>
         </div>
@@ -897,6 +936,13 @@ function OCRLanding() {
             </div>
           </div>
         </div>
+      )}
+
+      {showSignaturePad && (
+        <SignaturePad 
+          onConfirm={handleSignatureConfirm} 
+          onCancel={handleSignatureCancel} 
+        />
       )}
 
       {toast && <div className="toast">{toast}</div>}
